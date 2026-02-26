@@ -1,13 +1,32 @@
-"""Alembic migration environment."""
+"""Alembic migration environment.
+
+Reads DATABASE_URL from environment if set, automatically converting
+the asyncpg URL to a sync psycopg2 URL for Alembic compatibility:
+    postgresql+asyncpg://...  →  postgresql://...
+"""
+import os
 from logging.config import fileConfig
+
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 
 from app.models.risk_assessment import Base
 
 config = context.config
+
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+
+# Override sqlalchemy.url from DATABASE_URL env var (sync version)
+db_url = os.environ.get("DATABASE_URL", "")
+if db_url:
+    # FastAPI uses postgresql+asyncpg://; Alembic needs plain postgresql://
+    sync_url = (
+        db_url
+        .replace("postgresql+asyncpg://", "postgresql://")
+        .replace("postgresql+psycopg2://", "postgresql://")
+    )
+    config.set_main_option("sqlalchemy.url", sync_url)
 
 target_metadata = Base.metadata
 

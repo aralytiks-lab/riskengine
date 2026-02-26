@@ -27,6 +27,34 @@ class PartyType(str, Enum):
     B2C = "B2C"
 
 
+class ZefixStatus(str, Enum):
+    """Company registration status from the Swiss Zefix (commercial register)."""
+    ACTIVE = "ACTIVE"           # In Handelsregister, status active
+    DISSOLVED = "DISSOLVED"     # Gelöscht / liquidated → hard decline
+    SUSPENDED = "SUSPENDED"     # Under liquidation proceedings → hard decline
+    NOT_FOUND = "NOT_FOUND"     # Not in Zefix → hard decline
+    UNKNOWN = "UNKNOWN"         # Not yet queried
+
+
+class LegalForm(str, Enum):
+    """Swiss legal forms (Rechtsformen)."""
+    AG = "AG"                   # Aktiengesellschaft — most established
+    GMBH = "GmbH"              # Gesellschaft mit beschränkter Haftung
+    KG = "KG"                  # Kommanditgesellschaft
+    EINZELFIRMA = "Einzelfirma" # Sole proprietorship — higher risk
+    OTHER = "Other"
+    UNKNOWN = "Unknown"
+
+
+class IndustryRisk(str, Enum):
+    """Industry risk tier — maps from NACE/UID code to risk category."""
+    LOW = "Low"           # Healthcare, Education, Public admin, Finance
+    MEDIUM = "Medium"     # Manufacturing, Retail, Hospitality, Services
+    HIGH = "High"         # Construction, Transportation, Agriculture
+    CRITICAL = "Critical" # Mining, highly cyclical sectors
+    UNKNOWN = "Unknown"   # Industry not classified
+
+
 class IncomeType(str, Enum):
     EMPLOYED = "employed"
     SELF_EMPLOYED = "self_employed"
@@ -54,10 +82,28 @@ class CustomerData(BaseModel):
     monthly_insurance: Optional[float] = Field(None, ge=0)
     monthly_alimony: Optional[float] = Field(None, ge=0)
 
-    # B2B fields
+    # B2B financial fields
     annual_revenue: Optional[float] = Field(None, ge=0, description="For B2B: company annual revenue CHF")
     annual_ebitda: Optional[float] = Field(None, ge=0, description="For B2B: company EBITDA CHF")
     total_debt_service: Optional[float] = Field(None, ge=0, description="For B2B: annual debt service CHF")
+
+    # B2B company profile fields (from Zefix + CRM)
+    company_age_years: Optional[int] = Field(
+        None, ge=0,
+        description="For B2B: years since company founding (from Zefix UID-Register or CRM)",
+    )
+    zefix_status: Optional[ZefixStatus] = Field(
+        None,
+        description="Zefix commercial register status. DISSOLVED/SUSPENDED/NOT_FOUND trigger hard decline.",
+    )
+    legal_form: Optional[LegalForm] = Field(
+        None,
+        description="Swiss legal form (Rechtsform): AG, GmbH, Einzelfirma, etc.",
+    )
+    industry_risk: Optional[IndustryRisk] = Field(
+        None,
+        description="Industry risk tier mapped from NACE/UID code by upstream service.",
+    )
 
     # Bureau scores (already fetched by upstream services)
     crif_score: Optional[int] = Field(None, ge=0, le=1000)

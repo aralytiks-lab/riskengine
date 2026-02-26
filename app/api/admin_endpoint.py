@@ -1,24 +1,34 @@
 """
-Admin / Calibration API — CRUD for scoring rules.
+Admin / Calibration API — CRUD for scoring rules + batch job triggers.
 
-Used by the Calibration UI to manage factor bins, tier thresholds,
-and business rules without code deployments.
+Endpoints:
+  GET/PUT /v1/admin/versions, /factors, /tiers, /rules
+    → Calibration CRUD (used by Calibration UI)
 
-All changes are audit-logged.
+  POST /v1/admin/refresh-dealer-metrics
+    → Trigger the nightly dealer default rate refresh from DataHub
+
+  POST /v1/admin/refresh-segment-performance
+    → Trigger the quarterly per-bin WoE drift refresh from DataHub
+
+All calibration changes are audit-logged.
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import verify_token
 from app.models.database import get_db
+from app.services.dealer_metrics_refresh import run_refresh as dealer_refresh
+from app.services.quarterly_segment_refresh import run_refresh as segment_refresh
 
 logger = structlog.get_logger()
 router = APIRouter(prefix="/v1/admin", tags=["admin"])
@@ -281,3 +291,112 @@ async def list_audit_log(version_id: str, limit: int = 50, db: AsyncSession = De
         f"SELECT * FROM {SCHEMA}.calibration_audit_log WHERE version_id = :v ORDER BY changed_at DESC LIMIT :l"
     ), {"v": version_id, "l": limit})
     return [dict(r._mapping) for r in result]
+
+
+# ══ Batch Job Triggers ════════════════════════════════════════════════════
+
+class RefreshResponse(BaseModel):
+    triggered_by: str
+    status: str
+    message: str
+    job_result: Optional[dict] = None
+
+
+@router.post(
+    "/refresh-dealer-metrics",
+    response_model=RefreshResponse,
+    summary="Trigger dealer default rate refresh from DataHub",
+    description=(
+        "Runs the nightly dealer metrics batch job on demand. "
+        "Reads dwh.dim_contract for every dealer, computes default rates, "
+        "and upserts into lt_risk_engine.dealer_risk_metrics. "
+        "Typically scheduled at 02:00 UTC but can be triggered manually here."
+    ),
+)
+async def trigger_dealer_metrics_refresh(
+    background_tasks: BackgroundTasks,
+    token: dict = Depends(verify_token),
+):
+    """
+    Runs synchronously (awaited) so the caller gets the full result.
+    If you need fire-and-forget, add background_tasks.add_task(dealer_refresh) instead.
+    The underlying psycopg2 calls are run in a thread pool to avoid blocking the event loop.
+    """
+    user = token.get("sub", "unknown")
+    logger.info("dealer_metrics_refresh_triggered", triggered_by=user)
+
+    try:
+        result = await asyncio.to_thread(dealer_refresh)
+    except Exception as e:
+        logger.error("dealer_metrics_refresh_failed", error=str(e), triggered_by=user)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Dealer metrics refresh failed: {e}",
+        )
+
+    return RefreshResponse(
+        triggered_by=user,
+        status="success",
+        message=(
+            f"Refreshed {result['dealers_processed']} dealers, "
+            f"{result['watchlist_count']} on watchlist "
+            f"({result['elapsed_seconds']}s)"
+        ),
+        job_result=result,
+    )
+
+
+@router.post(
+    "/refresh-segment-performance",
+    response_model=RefreshResponse,
+    summary="Trigger quarterly per-bin WoE drift refresh from DataHub",
+    description=(
+        "Runs the quarterly segment performance batch job on demand. "
+        "Queries DataHub for observed default rates per scoring factor bin, "
+        "computes WoE drift vs the original scorecard, and writes to "
+        "lt_risk_engine.population_segment_performance + model_monitoring_snapshot. "
+        "Flags any bins with WoE drift > 0.1 nats for recalibration review."
+    ),
+)
+async def trigger_segment_performance_refresh(
+    background_tasks: BackgroundTasks,
+    window_months: int = 12,
+    token: dict = Depends(verify_token),
+):
+    """
+    window_months: how many months of history to include (default 12).
+    The underlying psycopg2 calls are run in a thread pool.
+    """
+    user = token.get("sub", "unknown")
+    logger.info("segment_refresh_triggered", triggered_by=user, window_months=window_months)
+
+    try:
+        result = await asyncio.to_thread(
+            segment_refresh,
+            window_months=window_months,
+        )
+    except Exception as e:
+        logger.error("segment_refresh_failed", error=str(e), triggered_by=user)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Segment performance refresh failed: {e}",
+        )
+
+    high_drift = result.get("high_drift_bins", [])
+    drift_note = (
+        f" | {len(high_drift)} bins with WoE drift >{0.1} nats flagged for review"
+        if high_drift else ""
+    )
+
+    return RefreshResponse(
+        triggered_by=user,
+        status=result.get("status", "success"),
+        message=(
+            f"{result['factors_processed']} factors, "
+            f"{result['segments_written']} segments written, "
+            f"portfolio DR={result.get('overall_dr', 'N/A')}, "
+            f"PSI={result.get('psi_status', 'N/A')} "
+            f"({result['elapsed_seconds']}s){drift_note}"
+        ),
+        job_result=result,
+    )
