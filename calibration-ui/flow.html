@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LT Risk Engine — Data Flow &amp; Architecture</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0F172A; color: #E2E8F0; }
+    .tab-btn { padding: 10px 24px; font-size: 13px; font-weight: 600; background: none; border: none; cursor: pointer; border-bottom: 2px solid transparent; color: #94A3B8; transition: all 0.2s; }
+    .tab-btn:hover { color: #CBD5E1; }
+    .tab-btn.active { color: #38BDF8; border-bottom-color: #38BDF8; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes slideRight { from { transform: translateX(-20px); opacity:0; } to { transform: translateX(0); opacity:1; } }
+    .fade-in { animation: fadeIn 0.4s ease-out forwards; }
+    .stage-card { background: #1E293B; border: 1px solid #334155; border-radius: 12px; padding: 20px; transition: all 0.3s; margin-bottom: 16px; }
+    .stage-card.active { border-color: #38BDF8; box-shadow: 0 0 30px rgba(56,189,248,0.15); }
+    .stage-card.completed { border-color: #22C55E; }
+    .data-pill { display: inline-block; padding: 3px 10px; border-radius: 6px; font-size: 11px; font-family: monospace; margin: 2px; }
+    .arch-box { border: 2px solid; border-radius: 12px; padding: 16px; text-align: center; transition: all 0.3s; }
+    .arch-box:hover { transform: translateY(-2px); }
+    .json-panel { background: #0F172A; border: 1px solid #334155; border-radius: 8px; padding: 16px; font-family: 'SF Mono','Fira Code',monospace; font-size: 11.5px; line-height: 1.6; overflow: auto; max-height: 600px; white-space: pre-wrap; word-break: break-word; }
+    .jk { color: #38BDF8; } .js { color: #A78BFA; } .jn { color: #34D399; } .jb { color: #FB923C; } .jnull { color: #64748B; }
+    .mapping-row { display: grid; grid-template-columns: 1fr 40px 1fr 40px 1fr; align-items: center; padding: 8px 0; border-bottom: 1px solid #1E293B; font-size: 12px; }
+    .mapping-row:last-child { border-bottom: none; }
+    .arrow-col { text-align: center; color: #38BDF8; font-weight: 700; }
+    .src-col { font-family: monospace; color: #A78BFA; }
+    .kpi-col { font-family: monospace; color: #34D399; font-weight: 600; }
+    .formula-col { font-family: monospace; color: #FB923C; font-size: 11px; }
+    .kpi-bar { height: 6px; border-radius: 3px; transition: width 0.8s ease; }
+    .scroll-x { overflow-x: auto; padding-bottom: 8px; }
+    .scroll-x::-webkit-scrollbar { height: 6px; }
+    .scroll-x::-webkit-scrollbar-track { background: #1E293B; border-radius: 3px; }
+    .scroll-x::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // ═══════════════════════════════════════════
+    // REAL ODS → KPI MAPPING (from actual DB schema)
+    // ═══════════════════════════════════════════
+    const ODS_MAPPING = [
+      { kpi: "LTV", type: "CALCULATED", odsTables: ["contracts_sst", "contracts_sst"], odsColumns: ["financed_amount", "offer_price (vehicle)"], formula: "(financed_amount / offer_price) × 100", description: "Loan-to-Value ratio — not a raw input, computed by engine" },
+      { kpi: "Term", type: "DIRECT", odsTables: ["contracts_sst"], odsColumns: ["duration"], formula: "duration (months)", description: "Contract duration in months" },
+      { kpi: "Age", type: "CALCULATED", odsTables: ["persons_sst"], odsColumns: ["date_of_birth"], formula: "today − date_of_birth (years)", description: "Customer age at application date" },
+      { kpi: "CRIF", type: "DIRECT", odsTables: ["crif_score"], odsColumns: ["crif_score"], formula: "crif_score (0-1000)", description: "External CRIF bureau score — fetched via API, stored in ods.crif_score" },
+      { kpi: "Intrum", type: "DIRECT", odsTables: ["person_expenses_sst"], odsColumns: ["collection_procedures"], formula: "collection_procedures count", description: "Intrum debt collection data" },
+      { kpi: "DSCR", type: "CALCULATED", odsTables: ["person_primary_incomes_sst", "person_expenses_sst", "contracts_sst"], odsColumns: ["net_income", "regular_expenses + existing_contract_costs + alimony_costs", "monthly_payment"], formula: "(net_income − expenses − min_living) / monthly_payment", description: "Debt Service Coverage Ratio — B2C or B2B calculation" },
+      { kpi: "Permit", type: "DIRECT", odsTables: ["persons_sst", "contracts_sst"], odsColumns: ["foreigner_id_card / nationality", "customer_type"], formula: "party_type + permit_type mapping", description: "Residence permit category derived from nationality & ID card type" },
+      { kpi: "VehiclePriceTier", type: "DIRECT", odsTables: ["contracts_sst"], odsColumns: ["offer_price"], formula: "offer_price tier (≤20k/20-50k/50-100k/>100k)", description: "Vehicle price segment for collateral risk" },
+      { kpi: "ZEK", type: "DIRECT", odsTables: ["contracts_sst"], odsColumns: ["zek_code, zek_credit_application_id"], formula: "zek_code + entry count", description: "ZEK central credit information bureau entries" },
+      { kpi: "DealerRisk", type: "CALCULATED", odsTables: ["dealers_sst", "contracts_sst"], odsColumns: ["dealer.id + historical default rate"], formula: "dealer_default_rate from portfolio stats", description: "Dealer's historical default rate — calculated from portfolio" },
+    ];
+
+    // ═══════════════════════════════════════════
+    // SAMPLE INPUT JSON (what Flowable POST sends)
+    // ═══════════════════════════════════════════
+    const SAMPLE_INPUT = {
+      request_id: "FLOW-2026-02-26-001",
+      timestamp: "2026-02-26T17:00:00Z",
+      customer: {
+        customer_id: "CUST-12345",
+        date_of_birth: "1985-06-15",
+        party_type: "B2C",
+        permit_type: "C",
+        nationality: "CH",
+        income_type: "employed",
+        monthly_gross_income: 9500.00,
+        monthly_net_income: 7200.00,
+        monthly_existing_obligations: 450.00,
+        monthly_rent: 1400.00,
+        monthly_insurance: 280.00,
+        monthly_alimony: 0.00,
+        crif_score: 680,
+        intrum_score: 4,
+        zek_has_entries: false,
+        zek_entry_count: 0
+      },
+      vehicle: {
+        vehicle_price: 55000.00,
+        vehicle_type: "SUV",
+        vehicle_age_months: 0,
+        is_electric: true
+      },
+      contract: {
+        contract_id: "CTR-2026-0042",
+        financed_amount: 44000.00,
+        downpayment_amount: 11000.00,
+        residual_value: 22000.00,
+        term_months: 48,
+        monthly_payment: 850.00,
+        interest_rate: 4.25,
+        product_type: "LEASING"
+      },
+      dealer: {
+        dealer_id: "DLR-ZURICH-007",
+        dealer_name: "AutoCenter Zurich",
+        dealer_default_rate: 0.035,
+        dealer_active_months: 48,
+        dealer_volume_tier: "GOLD"
+      }
+    };
+
+    // ═══════════════════════════════════════════
+    // SAMPLE OUTPUT JSON (what engine returns)
+    // ═══════════════════════════════════════════
+    const SAMPLE_OUTPUT = {
+      request_id: "FLOW-2026-02-26-001",
+      assessment_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      model_version: "1.2",
+      total_score: 31.0,
+      tier: "BRIGHT_GREEN",
+      decision: "AUTO_APPROVE",
+      probability_of_default: 0.015,
+      factor_scores: [
+        { factor_name: "LTV", raw_value: "80.0%", bin_label: "75-85%", weight: 0.15, raw_score: 4.0 },
+        { factor_name: "Term", raw_value: "48m", bin_label: "37-48m", weight: 0.10, raw_score: 6.0 },
+        { factor_name: "Age", raw_value: "40", bin_label: "36-45", weight: 0.10, raw_score: 0.0 },
+        { factor_name: "CRIF", raw_value: "680", bin_label: "500-699 (Good)", weight: 0.15, raw_score: 4.0 },
+        { factor_name: "Intrum", raw_value: "4", bin_label: ">3 (Established)", weight: 0.10, raw_score: 5.0 },
+        { factor_name: "DSCR", raw_value: "4.07", bin_label: "3-7 (Adequate)", weight: 0.15, raw_score: 0.0 },
+        { factor_name: "Permit", raw_value: "C_permit", bin_label: "C_permit", weight: 0.10, raw_score: 5.0 },
+        { factor_name: "VehiclePriceTier", raw_value: "55000", bin_label: "50k-100k (Premium)", weight: 0.05, raw_score: 2.0 },
+        { factor_name: "ZEK", raw_value: "Clean", bin_label: "No negative entries", weight: 0.05, raw_score: 5.0 },
+        { factor_name: "DealerRisk", raw_value: "3.5%", bin_label: "3-8% (Average)", weight: 0.05, raw_score: 0.0 }
+      ],
+      dscr: {
+        dscr_value: 4.07,
+        monthly_disposable_income: 3585.0,
+        monthly_payment: 850.0,
+        calculation_method: "B2C_NET_INCOME",
+        is_valid: true
+      },
+      business_rule_overrides: [],
+      evaluated_at: "2026-02-26T17:00:00.003Z",
+      processing_time_ms: 3,
+      legacy_score: 421,
+      legacy_band: "B"
+    };
+
+    // ═══════════════════════════════════════════
+    // JSON RENDERER
+    // ═══════════════════════════════════════════
+    function JsonHighlight({ data }) {
+      const json = JSON.stringify(data, null, 2);
+      const lines = json.split('\n').map((line, i) => {
+        const hl = line
+          .replace(/"([^"]+)"(?=\s*:)/g, '<span class="jk">"$1"</span>')
+          .replace(/:\s*"([^"]*)"/g, ': <span class="js">"$1"</span>')
+          .replace(/:\s*(-?\d+\.?\d*)/g, ': <span class="jn">$1</span>')
+          .replace(/:\s*(true|false)/g, ': <span class="jb">$1</span>')
+          .replace(/:\s*(null)/g, ': <span class="jnull">$1</span>');
+        return hl;
+      });
+      return <div className="json-panel" dangerouslySetInnerHTML={{ __html: lines.join('\n') }} />;
+    }
+
+    // ═══════════════════════════════════════════
+    // STAGE INDICATORS
+    // ═══════════════════════════════════════════
+    function StageBar({ stage }) {
+      const stages = [
+        { n: 1, l: "ODS Data", icon: "🗄️" },
+        { n: 2, l: "Flowable POST", icon: "📤" },
+        { n: 3, l: "KPI Derivation", icon: "🔬" },
+        { n: 4, l: "Bin + Score", icon: "📊" },
+        { n: 5, l: "Rules + Tier", icon: "⚖️" },
+        { n: 6, l: "Response", icon: "📥" },
+      ];
+      return (
+        <div style={{ display: "flex", alignItems: "center", gap: "0", marginBottom: "28px" }}>
+          {stages.map((s, i) => {
+            const completed = stage > s.n;
+            const active = stage === s.n;
+            const bg = completed ? "#22C55E" : active ? "#38BDF8" : "#334155";
+            const tc = completed || active ? "#fff" : "#64748B";
+            return (
+              <React.Fragment key={i}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "4px", minWidth: "70px" }}>
+                  <div style={{ width: 32, height: 32, borderRadius: "50%", background: bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "14px", transition: "all 0.3s" }}>
+                    {completed ? "✓" : s.icon}
+                  </div>
+                  <span style={{ fontSize: "10px", fontWeight: 600, color: tc, textTransform: "uppercase", letterSpacing: "0.3px", textAlign: "center" }}>{s.l}</span>
+                </div>
+                {i < 5 && <div style={{ flex: 1, height: "2px", background: completed ? "#22C55E" : active ? "#38BDF8" : "#334155", margin: "0 4px", marginBottom: "18px", transition: "background 0.5s" }} />}
+              </React.Fragment>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════
+    // PIPELINE SIMULATOR
+    // ═══════════════════════════════════════════
+    function PipelineSimulator() {
+      const [stage, setStage] = useState(0);
+      const [autoPlay, setAutoPlay] = useState(false);
+      const [expandedKpi, setExpandedKpi] = useState(null);
+
+      useEffect(() => {
+        if (!autoPlay || stage >= 6) return;
+        const timer = setTimeout(() => setStage(s => s + 1), 2000);
+        return () => clearTimeout(timer);
+      }, [stage, autoPlay]);
+
+      const reset = () => { setStage(0); setAutoPlay(false); };
+      const runAll = () => { setStage(1); setAutoPlay(true); };
+      const stepNext = () => { if (stage < 6) setStage(s => s + 1); };
+
+      return (
+        <div>
+          <StageBar stage={stage} />
+
+          {/* Controls */}
+          <div style={{ display: "flex", gap: "12px", marginBottom: "24px", justifyContent: "center" }}>
+            <button onClick={runAll} disabled={autoPlay && stage < 6} style={{ padding: "10px 24px", background: "#2563EB", color: "#fff", border: "none", borderRadius: "8px", fontWeight: 600, cursor: "pointer", fontSize: "13px", opacity: autoPlay && stage < 6 ? 0.6 : 1 }}>▶ Run Full Pipeline</button>
+            <button onClick={stepNext} disabled={stage >= 6} style={{ padding: "10px 24px", background: "#1E293B", color: "#CBD5E1", border: "1px solid #475569", borderRadius: "8px", fontWeight: 600, cursor: "pointer", fontSize: "13px", opacity: stage >= 6 ? 0.4 : 1 }}>Step →</button>
+            <button onClick={reset} style={{ padding: "10px 24px", background: "#1E293B", color: "#CBD5E1", border: "1px solid #475569", borderRadius: "8px", fontWeight: 600, cursor: "pointer", fontSize: "13px" }}>↻ Reset</button>
+          </div>
+
+          {/* Idle */}
+          {stage === 0 && (
+            <div className="fade-in" style={{ textAlign: "center", padding: "80px 20px", color: "#64748B" }}>
+              <div style={{ fontSize: "48px", marginBottom: "16px" }}>🔄</div>
+              <h3 style={{ fontSize: "18px", marginBottom: "8px", color: "#94A3B8" }}>Pipeline Ready</h3>
+              <p>Shows how data flows: ODS tables → Flowable aggregates → Risk Engine derives KPIs → Scores → Decision</p>
+            </div>
+          )}
+
+          {/* Stage 1: ODS Source Tables */}
+          {stage >= 1 && (
+            <div className={`stage-card fade-in ${stage === 1 ? "active" : "completed"}`}>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+                <span style={{ fontSize: "20px" }}>🗄️</span>
+                <div>
+                  <h3 style={{ fontSize: "15px", fontWeight: 700, color: stage >= 2 ? "#22C55E" : "#38BDF8" }}>Stage 1: ODS Source Tables (PostgreSQL)</h3>
+                  <p style={{ fontSize: "12px", color: "#64748B" }}>Raw data lives across multiple ODS tables — Flowable's upstream services fetch &amp; aggregate these</p>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "10px" }}>
+                {[
+                  { table: "persons_sst", color: "#38BDF8", fields: ["date_of_birth", "nationality", "foreigner_id_card", "marital_status"] },
+                  { table: "person_primary_incomes_sst", color: "#34D399", fields: ["net_income", "income_per_month", "partner_net_income", "bonus_sideline_per_year"] },
+                  { table: "person_expenses_sst", color: "#FB923C", fields: ["regular_expenses", "existing_contract_costs", "alimony_costs", "collection_procedures"] },
+                  { table: "contracts_sst", color: "#A78BFA", fields: ["financed_amount", "offer_price", "duration", "monthly_payment", "customer_type", "zek_code", "dscr_check_status"] },
+                  { table: "crif_score", color: "#F472B6", fields: ["crif_score", "country_code", "api_call_dttm"] },
+                  { table: "cars_sst", color: "#818CF8", fields: ["brand", "model", "is_electric", "eurotax_code", "first_registration_date"] },
+                  { table: "dealers_sst", color: "#FBBF24", fields: ["name", "status", "company_id", "registered_on"] },
+                  { table: "cs_response", color: "#64748B", fields: ["leasingrate", "restwert", "investitionswert", "vertragsdauer"] },
+                ].map((t, i) => (
+                  <div key={i} style={{ background: "#0F172A", border: `1px solid ${t.color}33`, borderRadius: "8px", padding: "10px" }}>
+                    <div style={{ fontSize: "11px", fontWeight: 700, color: t.color, fontFamily: "monospace", marginBottom: "6px" }}>ods.{t.table}</div>
+                    {t.fields.map((f, j) => (
+                      <div key={j} style={{ fontSize: "10px", color: "#94A3B8", fontFamily: "monospace", padding: "1px 0" }}>{f}</div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Stage 2: Flowable POST — Input JSON */}
+          {stage >= 2 && (
+            <div className={`stage-card fade-in ${stage === 2 ? "active" : "completed"}`}>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+                <span style={{ fontSize: "20px" }}>📤</span>
+                <div>
+                  <h3 style={{ fontSize: "15px", fontWeight: 700, color: stage >= 3 ? "#22C55E" : "#38BDF8" }}>Stage 2: Flowable Sends Input JSON</h3>
+                  <p style={{ fontSize: "12px", color: "#64748B" }}>POST /v1/risk/evaluate — single synchronous call with all context, engine is stateless</p>
+                </div>
+                <div style={{ marginLeft: "auto", padding: "4px 12px", background: "#1E3A5F", borderRadius: "6px", fontSize: "11px", color: "#38BDF8", fontWeight: 600, fontFamily: "monospace" }}>INPUT JSON</div>
+              </div>
+              <JsonHighlight data={SAMPLE_INPUT} />
+            </div>
+          )}
+
+          {/* Stage 3: KPI Derivation — ODS → KPI mapping */}
+          {stage >= 3 && (
+            <div className={`stage-card fade-in ${stage === 3 ? "active" : "completed"}`}>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+                <span style={{ fontSize: "20px" }}>🔬</span>
+                <div>
+                  <h3 style={{ fontSize: "15px", fontWeight: 700, color: stage >= 4 ? "#22C55E" : "#38BDF8" }}>Stage 3: KPI Derivation</h3>
+                  <p style={{ fontSize: "12px", color: "#64748B" }}>Raw inputs transformed into 10 standardized risk KPIs — some are DIRECT reads, others CALCULATED</p>
+                </div>
+              </div>
+              {/* Column headers */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 40px 1fr 40px 1fr", padding: "8px 0", borderBottom: "2px solid #334155", marginBottom: "4px" }}>
+                <div style={{ fontSize: "10px", fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.5px" }}>ODS Source</div>
+                <div></div>
+                <div style={{ fontSize: "10px", fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.5px" }}>Derivation Formula</div>
+                <div></div>
+                <div style={{ fontSize: "10px", fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.5px" }}>Risk KPI</div>
+              </div>
+              {ODS_MAPPING.map((m, i) => (
+                <div key={i} className="mapping-row" onClick={() => setExpandedKpi(expandedKpi === m.kpi ? null : m.kpi)} style={{ cursor: "pointer", background: expandedKpi === m.kpi ? "#0F172A" : "transparent", borderRadius: "4px", padding: "10px 8px" }}>
+                  <div className="src-col">
+                    {m.odsColumns.map((c, j) => (
+                      <div key={j}><span style={{ color: "#64748B", fontSize: "10px" }}>{m.odsTables[j] || m.odsTables[0]}.</span>{c}</div>
+                    ))}
+                  </div>
+                  <div className="arrow-col">→</div>
+                  <div className="formula-col">{m.formula}</div>
+                  <div className="arrow-col">→</div>
+                  <div className="kpi-col" style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span>{m.kpi}</span>
+                    <span className="data-pill" style={{ background: m.type === "CALCULATED" ? "#7C3AED22" : "#0F766E22", color: m.type === "CALCULATED" ? "#A78BFA" : "#2DD4BF", border: `1px solid ${m.type === "CALCULATED" ? "#A78BFA33" : "#2DD4BF33"}` }}>
+                      {m.type}
+                    </span>
+                  </div>
+                </div>
+              ))}
+              <p style={{ fontSize: "10px", color: "#475569", marginTop: "8px", textAlign: "center" }}>Click any row to highlight · <span style={{ color: "#A78BFA" }}>CALCULATED</span> = derived by engine · <span style={{ color: "#2DD4BF" }}>DIRECT</span> = passed through from ODS</p>
+            </div>
+          )}
+
+          {/* Stage 4: Bin Lookup + Scoring */}
+          {stage >= 4 && (
+            <div className={`stage-card fade-in ${stage === 4 ? "active" : "completed"}`}>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+                <span style={{ fontSize: "20px" }}>📊</span>
+                <div>
+                  <h3 style={{ fontSize: "15px", fontWeight: 700, color: stage >= 5 ? "#22C55E" : "#38BDF8" }}>Stage 4: Scorecard Bin Lookup</h3>
+                  <p style={{ fontSize: "12px", color: "#64748B" }}>Each KPI value is matched to a calibrated bin → raw score assigned</p>
+                </div>
+              </div>
+              <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ textAlign: "left", color: "#64748B", fontSize: "10px", textTransform: "uppercase" }}>
+                    <th style={{ padding: "8px" }}>KPI</th>
+                    <th style={{ padding: "8px" }}>Weight</th>
+                    <th style={{ padding: "8px" }}>Value</th>
+                    <th style={{ padding: "8px" }}>→ Bin</th>
+                    <th style={{ padding: "8px" }}>Score</th>
+                    <th style={{ padding: "8px", width: "180px" }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {SAMPLE_OUTPUT.factor_scores.map((f, i) => {
+                    const barW = Math.abs(f.raw_score) / 10 * 100;
+                    const barC = f.raw_score > 0 ? "#22C55E" : f.raw_score < 0 ? "#EF4444" : "#64748B";
+                    return (
+                      <tr key={i} style={{ borderTop: "1px solid #1E293B", animation: `slideRight 0.3s ease ${i * 0.04}s both` }}>
+                        <td style={{ padding: "8px", fontWeight: 600 }}>{f.factor_name}</td>
+                        <td style={{ padding: "8px", fontFamily: "monospace", color: "#64748B" }}>{(f.weight * 100)}%</td>
+                        <td style={{ padding: "8px", fontFamily: "monospace", color: "#38BDF8" }}>{f.raw_value}</td>
+                        <td style={{ padding: "8px" }}><span className="data-pill" style={{ background: "#1E293B", color: "#A78BFA", border: "1px solid #334155" }}>{f.bin_label}</span></td>
+                        <td style={{ padding: "8px", fontFamily: "monospace", fontWeight: 700, color: barC, fontSize: "14px" }}>{f.raw_score > 0 ? "+" : ""}{f.raw_score}</td>
+                        <td style={{ padding: "8px" }}><div style={{ height: "6px", background: "#1E293B", borderRadius: "3px", overflow: "hidden" }}><div className="kpi-bar" style={{ width: `${barW}%`, background: barC }} /></div></td>
+                      </tr>
+                    );
+                  })}
+                  <tr style={{ borderTop: "2px solid #475569" }}>
+                    <td colSpan="4" style={{ padding: "12px 8px", fontWeight: 700, fontSize: "14px" }}>Total Composite Score</td>
+                    <td style={{ padding: "12px 8px", fontFamily: "monospace", fontWeight: 700, fontSize: "20px", color: "#22C55E" }}>+{SAMPLE_OUTPUT.total_score}</td>
+                    <td></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Stage 5: Business Rules + Tier */}
+          {stage >= 5 && (
+            <div className={`stage-card fade-in ${stage === 5 ? "active" : "completed"}`}>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+                <span style={{ fontSize: "20px" }}>⚖️</span>
+                <div>
+                  <h3 style={{ fontSize: "15px", fontWeight: 700, color: stage >= 6 ? "#22C55E" : "#38BDF8" }}>Stage 5: Business Rules &amp; Tier Assignment</h3>
+                  <p style={{ fontSize: "12px", color: "#64748B" }}>8 hard-kill rules checked → then score mapped to tier → decision</p>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+                <div style={{ background: "#0F172A", borderRadius: "8px", padding: "16px", border: "1px solid #22C55E44" }}>
+                  <h4 style={{ fontSize: "12px", color: "#22C55E", fontWeight: 700, marginBottom: "10px" }}>✓ Business Rules — All Clear</h4>
+                  {["BR-01: age ≥ 18 ✓","BR-02: LTV ≤ 120% ✓","BR-03: DSCR ≥ 0 ✓","BR-04: ZEK entries < 3 ✓","BR-05: CRIF ≥ 150 ✓","BR-06: Income present ✓","BR-07: Dealer DR ≤ 20% ✓","BR-08: Term ≤ 72m ✓"].map((r,i) => (
+                    <div key={i} style={{ fontSize: "11px", color: "#94A3B8", padding: "3px 0", fontFamily: "monospace" }}>{r}</div>
+                  ))}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "#0F172A", borderRadius: "8px", padding: "24px", border: "2px solid #27AE60" }}>
+                  <div style={{ fontSize: "10px", color: "#64748B", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "8px" }}>Tier Result</div>
+                  <div style={{ width: "72px", height: "72px", borderRadius: "50%", background: "#27AE60", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 0 30px #27AE6044" }}>
+                    <span style={{ fontSize: "22px", fontWeight: 700 }}>31</span>
+                  </div>
+                  <div style={{ fontSize: "16px", fontWeight: 700, color: "#27AE60", marginTop: "8px" }}>BRIGHT_GREEN</div>
+                  <div style={{ fontSize: "13px", color: "#E2E8F0", marginTop: "2px" }}>AUTO_APPROVE</div>
+                  <div style={{ fontSize: "11px", color: "#64748B", marginTop: "2px" }}>PD: 1.5%</div>
+                  <div style={{ display: "flex", gap: "4px", marginTop: "12px", width: "100%" }}>
+                    {[{ n:"RED",c:"#E74C3C",s:"< 0" },{ n:"YELLOW",c:"#F39C12",s:"≥ 0" },{ n:"GREEN",c:"#2ECC71",s:"≥ 10" },{ n:"B.GREEN",c:"#27AE60",s:"≥ 25" }].map((t,i) => (
+                      <div key={i} style={{ flex:1, textAlign:"center", padding:"5px 2px", borderRadius:"4px", background: i===3 ? t.c : t.c+"33" }}>
+                        <div style={{ fontSize:"8px", fontWeight:700, color:"#fff" }}>{t.n}</div>
+                        <div style={{ fontSize:"7px", color:"rgba(255,255,255,0.7)" }}>{t.s}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Stage 6: Output JSON */}
+          {stage >= 6 && (
+            <div className={`stage-card fade-in completed`}>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+                <span style={{ fontSize: "20px" }}>📥</span>
+                <div>
+                  <h3 style={{ fontSize: "15px", fontWeight: 700, color: "#22C55E" }}>Stage 6: JSON Response → Flowable</h3>
+                  <p style={{ fontSize: "12px", color: "#64748B" }}>Synchronous response — Flowable routes to next BPMN step based on decision field</p>
+                </div>
+                <div style={{ marginLeft: "auto", padding: "4px 12px", background: "#1F3B2E", borderRadius: "6px", fontSize: "11px", color: "#22C55E", fontWeight: 600, fontFamily: "monospace" }}>OUTPUT JSON</div>
+              </div>
+              <JsonHighlight data={SAMPLE_OUTPUT} />
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════
+    // INPUT / OUTPUT SIDE-BY-SIDE VIEW
+    // ═══════════════════════════════════════════
+    function InputOutputView() {
+      return (
+        <div className="fade-in">
+          <p style={{ textAlign: "center", color: "#64748B", fontSize: "13px", marginBottom: "20px" }}>
+            Side-by-side view of the exact JSON payloads exchanged between Flowable and the Risk Engine microservice
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 60px 1fr", gap: "0", alignItems: "start" }}>
+            {/* Input */}
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+                <div style={{ padding: "4px 12px", background: "#1E3A5F", borderRadius: "6px", fontSize: "12px", color: "#38BDF8", fontWeight: 700, fontFamily: "monospace" }}>POST /v1/risk/evaluate</div>
+                <span style={{ fontSize: "12px", color: "#64748B" }}>Input from Flowable</span>
+              </div>
+              <JsonHighlight data={SAMPLE_INPUT} />
+            </div>
+
+            {/* Arrow */}
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", paddingTop: "200px" }}>
+              <div style={{ fontSize: "24px", color: "#38BDF8" }}>→</div>
+              <div style={{ fontSize: "10px", color: "#64748B", textAlign: "center", marginTop: "4px" }}>Risk<br/>Engine<br/>v1.2</div>
+              <div style={{ fontSize: "24px", color: "#22C55E", marginTop: "4px" }}>→</div>
+            </div>
+
+            {/* Output */}
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+                <div style={{ padding: "4px 12px", background: "#1F3B2E", borderRadius: "6px", fontSize: "12px", color: "#22C55E", fontWeight: 700, fontFamily: "monospace" }}>200 OK — Response</div>
+                <span style={{ fontSize: "12px", color: "#64748B" }}>Output to Flowable</span>
+              </div>
+              <JsonHighlight data={SAMPLE_OUTPUT} />
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════
+    // ARCHITECTURE DIAGRAM
+    // ═══════════════════════════════════════════
+    function ArchitectureDiagram() {
+      return (
+        <div className="fade-in">
+          <div style={{ textAlign: "center", marginBottom: "12px" }}>
+            <span style={{ fontSize: "11px", color: "#64748B", textTransform: "uppercase", letterSpacing: "1px", fontWeight: 600 }}>External Systems &amp; Data Sources</span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "16px", marginBottom: "8px" }}>
+            {[
+              { name: "LeaseTeq CRM", sub: "Loan Origination (SST tables)", color: "#38BDF8", icon: "🏢", desc: "persons_sst, contracts_sst, person_primary_incomes_sst, person_expenses_sst" },
+              { name: "CRIF Bureau API", sub: "Credit Scoring", color: "#A78BFA", icon: "📊", desc: "ods.crif_score → crif_score (0-1000)" },
+              { name: "ZEK / Intrum", sub: "Debt Collection APIs", color: "#FB923C", icon: "🔍", desc: "contracts_sst.zek_code, person_expenses_sst.collection_procedures" },
+              { name: "Dealer Portal", sub: "dealers_sst + portfolio stats", color: "#34D399", icon: "🚗", desc: "dealers_sst.name, default_rate (calculated)" },
+            ].map((s, i) => (
+              <div key={i} className="arch-box" style={{ borderColor: s.color + "66", background: "#1E293B" }}>
+                <div style={{ fontSize: "24px", marginBottom: "8px" }}>{s.icon}</div>
+                <div style={{ fontSize: "14px", fontWeight: 700, color: s.color }}>{s.name}</div>
+                <div style={{ fontSize: "11px", color: "#64748B", marginTop: "2px" }}>{s.sub}</div>
+                <div style={{ fontSize: "9px", color: "#475569", marginTop: "6px", fontFamily: "monospace" }}>{s.desc}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ textAlign: "center", padding: "4px 0" }}>
+            <div style={{ display: "inline-flex", flexDirection: "column", alignItems: "center" }}>
+              <div style={{ width: "2px", height: "16px", background: "linear-gradient(180deg, #334155, #38BDF8)" }} />
+              <div style={{ fontSize: "10px", padding: "4px 12px", background: "#1E3A5F", color: "#38BDF8", borderRadius: "4px", fontWeight: 600 }}>Data aggregated into ODS (PostgreSQL) → Flowable reads &amp; sends to Risk Engine</div>
+              <div style={{ fontSize: "16px", color: "#38BDF8" }}>▼</div>
+            </div>
+          </div>
+
+          {/* Flowable */}
+          <div className="arch-box" style={{ borderColor: "#38BDF8", background: "#0F172A", margin: "0 auto", maxWidth: "700px", marginBottom: "8px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "12px" }}>
+              <span style={{ fontSize: "24px" }}>⚙️</span>
+              <div>
+                <div style={{ fontSize: "16px", fontWeight: 700, color: "#38BDF8" }}>Flowable BPMN Engine</div>
+                <div style={{ fontSize: "11px", color: "#64748B" }}>Orchestrates loan approval workflow — synchronous POST to Risk Engine</div>
+              </div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "center", gap: "6px", marginTop: "10px", flexWrap: "wrap" }}>
+              {["Application", "Data Enrichment", "Risk Evaluation", "Decision Routing", "Notification"].map((step, i) => (
+                <div key={i} style={{ padding: "3px 8px", background: i === 2 ? "#1E3A5F" : "#1E293B", border: `1px solid ${i === 2 ? "#38BDF8" : "#334155"}`, borderRadius: "4px", fontSize: "9px", color: i === 2 ? "#38BDF8" : "#64748B", fontWeight: 600 }}>{step}</div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ textAlign: "center", padding: "4px 0" }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: "24px" }}>
+              <span style={{ fontSize: "10px", color: "#38BDF8", fontFamily: "monospace" }}>POST /v1/risk/evaluate ▼</span>
+              <span style={{ fontSize: "10px", color: "#22C55E", fontFamily: "monospace" }}>▲ JSON Response</span>
+            </div>
+          </div>
+
+          {/* Risk Engine */}
+          <div className="arch-box" style={{ borderColor: "#F59E0B", background: "#1E293B", marginBottom: "8px", padding: "20px" }}>
+            <div style={{ textAlign: "center", marginBottom: "14px" }}>
+              <div style={{ fontSize: "18px", fontWeight: 700, color: "#F59E0B" }}>🛡️ LT Risk Engine v1.2</div>
+              <div style={{ fontSize: "11px", color: "#64748B" }}>Stateless microservice — FastAPI + PostgreSQL</div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "8px" }}>
+              {[
+                { name: "DSCR Calc", desc: "B2C net income / B2B EBITDA", color: "#EF4444" },
+                { name: "10-Factor Scorer", desc: "Bin lookup from scorecard", color: "#F59E0B" },
+                { name: "Composite Score", desc: "Weighted sum", color: "#22C55E" },
+                { name: "Business Rules", desc: "8 hard-kill checks", color: "#A78BFA" },
+                { name: "Tier + Decision", desc: "Score → tier → decision + PD", color: "#38BDF8" },
+              ].map((c, i) => (
+                <div key={i} style={{ background: "#0F172A", borderRadius: "8px", padding: "10px", border: `1px solid ${c.color}33`, textAlign: "center" }}>
+                  <div style={{ fontSize: "11px", fontWeight: 700, color: c.color }}>{c.name}</div>
+                  <div style={{ fontSize: "9px", color: "#64748B", marginTop: "3px" }}>{c.desc}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: "12px", display: "flex", gap: "4px", justifyContent: "center", flexWrap: "wrap" }}>
+              {Object.entries({LTV:15,Term:10,Age:10,CRIF:15,Intrum:10,DSCR:15,Permit:10,VehiclePriceTier:5,ZEK:5,DealerRisk:5}).map(([n,w]) => (
+                <span key={n} className="data-pill" style={{ background: "#0F172A", color: "#94A3B8", border: "1px solid #334155", fontSize: "10px" }}>{n} <span style={{ color: "#38BDF8" }}>{w}%</span></span>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ textAlign: "center", marginTop: "8px", marginBottom: "10px" }}>
+            <span style={{ fontSize: "10px", color: "#64748B", textTransform: "uppercase", letterSpacing: "1px", fontWeight: 600 }}>Decision Outcomes</span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "14px" }}>
+            {[
+              { tier: "BRIGHT GREEN", decision: "Auto-Approve", desc: "Contract created immediately", color: "#27AE60", icon: "✅" },
+              { tier: "GREEN", decision: "Standard Approval", desc: "Standard credit check", color: "#2ECC71", icon: "👍" },
+              { tier: "YELLOW", decision: "Manual Review", desc: "Routed to analyst queue", color: "#F39C12", icon: "👤" },
+              { tier: "RED", decision: "Decline", desc: "Automatic rejection", color: "#E74C3C", icon: "❌" },
+            ].map((o, i) => (
+              <div key={i} className="arch-box" style={{ borderColor: o.color + "66", background: "#1E293B" }}>
+                <div style={{ fontSize: "20px", marginBottom: "6px" }}>{o.icon}</div>
+                <div style={{ fontSize: "12px", fontWeight: 700, color: o.color }}>{o.tier}</div>
+                <div style={{ fontSize: "11px", fontWeight: 600, color: "#E2E8F0", marginTop: "3px" }}>{o.decision}</div>
+                <div style={{ fontSize: "9px", color: "#64748B", marginTop: "3px" }}>{o.desc}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ textAlign: "center", marginTop: "14px" }}>
+            <div className="arch-box" style={{ borderColor: "#334155", background: "#0F172A", display: "inline-block", padding: "10px 28px" }}>
+              <div style={{ fontSize: "11px", fontWeight: 700, color: "#64748B" }}>🗄️ PostgreSQL — Calibration Config · Audit Log · Assessment History</div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════
+    // MAIN APP
+    // ═══════════════════════════════════════════
+    function App() {
+      const [view, setView] = useState("pipeline");
+      return (
+        <div style={{ minHeight: "100vh" }}>
+          <div style={{ background: "#1E293B", borderBottom: "1px solid #334155" }}>
+            <div style={{ maxWidth: "1200px", margin: "0 auto", padding: "14px 24px" }}>
+              <h1 style={{ fontSize: "20px", fontWeight: 700 }}>LT Risk Engine — Data Flow &amp; Architecture</h1>
+              <p style={{ fontSize: "12px", color: "#64748B", marginTop: "3px" }}>Model <span style={{ fontFamily: "monospace", color: "#38BDF8" }}>v1.2.0</span> · Aralytiks LLC</p>
+            </div>
+          </div>
+          <div style={{ maxWidth: "1200px", margin: "0 auto", padding: "0 24px", borderBottom: "1px solid #334155" }}>
+            {[
+              { key: "pipeline", label: "▶ Pipeline Simulator" },
+              { key: "io", label: "{ } Input / Output JSON" },
+              { key: "architecture", label: "🏗 Architecture Diagram" },
+            ].map(t => (
+              <button key={t.key} className={`tab-btn ${view === t.key ? "active" : ""}`} onClick={() => setView(t.key)}>{t.label}</button>
+            ))}
+          </div>
+          <div style={{ maxWidth: "1200px", margin: "0 auto", padding: "24px" }}>
+            {view === "pipeline" && <PipelineSimulator />}
+            {view === "io" && <InputOutputView />}
+            {view === "architecture" && <ArchitectureDiagram />}
+          </div>
+          <div style={{ textAlign: "center", padding: "20px", color: "#475569", fontSize: "11px" }}>LT Risk Engine v1.2.0 — Flow Visualization — Aralytiks LLC</div>
+        </div>
+      );
+    }
+
+    ReactDOM.render(<App />, document.getElementById("root"));
+  </script>
+</body>
+</html>
