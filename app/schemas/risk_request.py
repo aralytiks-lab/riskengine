@@ -68,7 +68,10 @@ class IncomeType(str, Enum):
 class CustomerData(BaseModel):
     """Demographics + bureau scores — provided by Flowable from ODS."""
     customer_id: str
-    date_of_birth: date
+    date_of_birth: Optional[date] = Field(
+        None,
+        description="Required for B2C (age scoring + BR-01 minor check). Not applicable for B2B companies.",
+    )
     party_type: PartyType
     permit_type: Optional[PermitType] = None
     nationality: Optional[str] = None
