@@ -560,6 +560,452 @@
     }
 
     // ═══════════════════════════════════════════
+    // ER DIAGRAM TAB
+    // ═══════════════════════════════════════════
+    function ERDiagram() {
+      const tables = [
+        {
+          name: "risk_assessment", color: "#38BDF8", x: 380, y: 20,
+          cols: [
+            { name: "assessment_id (PK)", type: "UUID", key: true },
+            { name: "request_id", type: "varchar" },
+            { name: "contract_number", type: "varchar" },
+            { name: "model_version_id (FK)", type: "int" },
+            { name: "composite_score", type: "numeric" },
+            { name: "tier", type: "varchar" },
+            { name: "decision", type: "varchar" },
+            { name: "input_json", type: "JSONB" },
+            { name: "output_json", type: "JSONB" },
+            { name: "factor_scores_json", type: "JSONB" },
+            { name: "rules_triggered_json", type: "JSONB" },
+            { name: "defaults_applied_json", type: "JSONB" },
+            { name: "legacy_score", type: "int" },
+            { name: "legacy_band", type: "varchar" },
+            { name: "processing_time_ms", type: "int" },
+            { name: "evaluated_at", type: "timestamptz" },
+          ]
+        },
+        {
+          name: "model_version", color: "#A78BFA", x: 20, y: 20,
+          cols: [
+            { name: "id (PK)", type: "int", key: true },
+            { name: "version_id", type: "varchar" },
+            { name: "description", type: "text" },
+            { name: "is_active", type: "bool" },
+            { name: "activated_at", type: "timestamptz" },
+          ]
+        },
+        {
+          name: "scoring_factor_bins", color: "#A78BFA", x: 20, y: 240,
+          cols: [
+            { name: "id (PK)", type: "int", key: true },
+            { name: "model_version_id (FK)", type: "int" },
+            { name: "factor_name", type: "varchar" },
+            { name: "bin_label", type: "varchar" },
+            { name: "bin_min / bin_max", type: "numeric" },
+            { name: "points", type: "int" },
+            { name: "weight", type: "numeric" },
+            { name: "effective_from / to", type: "date" },
+          ]
+        },
+        {
+          name: "woe_scorecard_params", color: "#A78BFA", x: 20, y: 480,
+          cols: [
+            { name: "id (PK)", type: "int", key: true },
+            { name: "version_id (FK)", type: "varchar" },
+            { name: "param_type", type: "varchar" },
+            { name: "factor_name", type: "varchar" },
+            { name: "bin_label", type: "varchar" },
+            { name: "coefficient", type: "float" },
+            { name: "woe_value", type: "float" },
+            { name: "points", type: "float" },
+            { name: "bin_default_rate", type: "float" },
+          ]
+        },
+        {
+          name: "scoring_defaults_applied", color: "#F59E0B", x: 740, y: 20,
+          cols: [
+            { name: "id (PK)", type: "int", key: true },
+            { name: "assessment_id (FK)", type: "varchar" },
+            { name: "field_name", type: "varchar" },
+            { name: "original_value", type: "text" },
+            { name: "default_value", type: "text" },
+            { name: "default_source", type: "varchar" },
+            { name: "factor_affected", type: "varchar" },
+            { name: "impact_on_score", type: "float" },
+            { name: "created_at", type: "timestamptz" },
+          ]
+        },
+        {
+          name: "dealer_risk_metrics", color: "#34D399", x: 740, y: 310,
+          cols: [
+            { name: "id (PK)", type: "int", key: true },
+            { name: "dealer_id", type: "varchar" },
+            { name: "dealer_name", type: "varchar" },
+            { name: "snapshot_date", type: "date" },
+            { name: "active_contracts", type: "int" },
+            { name: "total_originated", type: "int" },
+            { name: "current_default_rate", type: "float" },
+            { name: "default_rate_trend", type: "varchar" },
+            { name: "is_watchlist", type: "bool" },
+            { name: "volume_tier", type: "varchar" },
+          ]
+        },
+        {
+          name: "population_segment_performance", color: "#34D399", x: 740, y: 580,
+          cols: [
+            { name: "id (PK)", type: "int", key: true },
+            { name: "snapshot_date", type: "date" },
+            { name: "segment_type", type: "varchar" },
+            { name: "segment_key", type: "varchar" },
+            { name: "factor_name", type: "varchar" },
+            { name: "contract_count", type: "int" },
+            { name: "observed_default_rate", type: "float" },
+            { name: "predicted_default_rate", type: "float" },
+            { name: "observed_woe", type: "float" },
+            { name: "woe_drift", type: "float" },
+          ]
+        },
+        {
+          name: "model_monitoring_snapshot", color: "#34D399", x: 380, y: 680,
+          cols: [
+            { name: "id (PK)", type: "int", key: true },
+            { name: "snapshot_date", type: "date" },
+            { name: "model_version", type: "varchar" },
+            { name: "gini_coefficient", type: "float" },
+            { name: "ks_statistic", type: "float" },
+            { name: "auc_roc", type: "float" },
+            { name: "psi_score", type: "float" },
+            { name: "psi_status", type: "varchar" },
+            { name: "calibration_ratio", type: "float" },
+            { name: "tier_distribution_json", type: "JSON" },
+          ]
+        },
+      ];
+
+      const BOX_W = 300;
+      const ROW_H = 20;
+      const HEADER_H = 28;
+      function tableH(t) { return HEADER_H + t.cols.length * ROW_H + 8; }
+
+      // Relationships: [from_table, to_table, label]
+      const rels = [
+        { from: "model_version", to: "risk_assessment", label: "1:N" },
+        { from: "model_version", to: "scoring_factor_bins", label: "1:N" },
+        { from: "model_version", to: "woe_scorecard_params", label: "1:N" },
+        { from: "risk_assessment", to: "scoring_defaults_applied", label: "1:N" },
+      ];
+
+      function tableCenter(t) {
+        return { x: t.x + BOX_W / 2, y: t.y + tableH(t) / 2 };
+      }
+      function tableEdge(t, target) {
+        const tc = tableCenter(t);
+        const tt = tableCenter(target);
+        if (tt.x > tc.x + BOX_W / 2) return { x: t.x + BOX_W, y: tc.y };
+        if (tt.x < tc.x - BOX_W / 2) return { x: t.x, y: tc.y };
+        if (tt.y > tc.y) return { x: tc.x, y: t.y + tableH(t) };
+        return { x: tc.x, y: t.y };
+      }
+
+      const totalH = Math.max(...tables.map(t => t.y + tableH(t))) + 40;
+
+      const [tooltip, setTooltip] = useState(null);
+
+      return (
+        <div className="fade-in">
+          <h2 style={{ fontSize: "17px", fontWeight: 700, marginBottom: "6px" }}>lt_risk_engine — Entity Relationship Diagram</h2>
+          <p style={{ fontSize: "12px", color: "#64748B", marginBottom: "16px" }}>PostgreSQL schema. Migration state: 001→005 applied. Click a table for details.</p>
+
+          <div style={{ display: "flex", gap: "12px", marginBottom: "14px", flexWrap: "wrap" }}>
+            {[
+              { color: "#A78BFA", label: "Model config (versioned scorecard)" },
+              { color: "#38BDF8", label: "Scoring transaction (per request)" },
+              { color: "#F59E0B", label: "Audit (defaults + overrides)" },
+              { color: "#34D399", label: "Historical / monitoring (batch-refreshed from DWH)" },
+            ].map((l, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px" }}>
+                <div style={{ width: 12, height: 12, borderRadius: 3, background: l.color }}></div>
+                <span style={{ color: "#94A3B8" }}>{l.label}</span>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ overflowX: "auto" }}>
+            <svg width={1080} height={totalH} style={{ background: "#0F172A", borderRadius: 12, border: "1px solid #334155" }}>
+              <defs>
+                <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
+                  <path d="M0,0 L0,6 L8,3 z" fill="#475569" />
+                </marker>
+              </defs>
+
+              {/* Relationship lines */}
+              {rels.map((r, i) => {
+                const fromT = tables.find(t => t.name === r.from);
+                const toT = tables.find(t => t.name === r.to);
+                if (!fromT || !toT) return null;
+                const a = tableEdge(fromT, toT);
+                const b = tableEdge(toT, fromT);
+                const mx = (a.x + b.x) / 2;
+                const my = (a.y + b.y) / 2;
+                return (
+                  <g key={i}>
+                    <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#475569" strokeWidth={1.5} strokeDasharray="5,3" markerEnd="url(#arrow)" />
+                    <rect x={mx - 14} y={my - 9} width={28} height={16} rx={4} fill="#1E293B" stroke="#475569" strokeWidth={1} />
+                    <text x={mx} y={my + 4} textAnchor="middle" fill="#94A3B8" fontSize={9} fontFamily="monospace">{r.label}</text>
+                  </g>
+                );
+              })}
+
+              {/* Tables */}
+              {tables.map((t, ti) => {
+                const h = tableH(t);
+                return (
+                  <g key={ti} onClick={() => setTooltip(tooltip === t.name ? null : t.name)} style={{ cursor: "pointer" }}>
+                    {/* Table box */}
+                    <rect x={t.x} y={t.y} width={BOX_W} height={h} rx={8} fill="#1E293B" stroke={t.color} strokeWidth={tooltip === t.name ? 2.5 : 1.5} />
+                    {/* Header */}
+                    <rect x={t.x} y={t.y} width={BOX_W} height={HEADER_H} rx={8} fill={t.color + "22"} />
+                    <rect x={t.x} y={t.y + HEADER_H - 4} width={BOX_W} height={4} fill={t.color + "22"} />
+                    <text x={t.x + 10} y={t.y + 18} fill={t.color} fontSize={11} fontWeight="700" fontFamily="-apple-system, sans-serif">{t.name}</text>
+                    <text x={t.x + BOX_W - 8} y={t.y + 18} textAnchor="end" fill={t.color + "99"} fontSize={9} fontFamily="monospace">lt_risk_engine</text>
+                    {/* Columns */}
+                    {t.cols.map((col, ci) => {
+                      const cy = t.y + HEADER_H + ci * ROW_H + ROW_H / 2 + 4;
+                      const isKey = col.key;
+                      const isFK = col.name.includes("(FK)");
+                      return (
+                        <g key={ci}>
+                          {ci % 2 === 1 && <rect x={t.x + 1} y={t.y + HEADER_H + ci * ROW_H + 2} width={BOX_W - 2} height={ROW_H} fill="#0F172A44" />}
+                          {isKey && <text x={t.x + 8} y={cy + 4} fill="#FBBF24" fontSize={9}>🔑</text>}
+                          {isFK && !isKey && <text x={t.x + 8} y={cy + 4} fill="#A78BFA" fontSize={9}>🔗</text>}
+                          <text x={t.x + (isKey || isFK ? 22 : 10)} y={cy + 4} fill={isKey ? "#FBBF24" : isFK ? "#A78BFA" : "#CBD5E1"} fontSize={10} fontFamily="'SF Mono',monospace">{col.name.replace(" (PK)","").replace(" (FK)","")}</text>
+                          <text x={t.x + BOX_W - 8} y={cy + 4} textAnchor="end" fill="#475569" fontSize={9} fontFamily="monospace">{col.type}</text>
+                        </g>
+                      );
+                    })}
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
+
+          <div className="note-box" style={{ marginTop: 16 }}>
+            <strong style={{ color: "#F59E0B" }}>Batch refresh flows:</strong> <span style={{ color: "#94A3B8" }}>dealer_risk_metrics ← nightly from dwh.dim_contract (02:00 UTC) · population_segment_performance ← quarterly from DWH · model_monitoring_snapshot ← quarterly computed metrics</span>
+          </div>
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════
+    // ANALYTICS TAB
+    // ═══════════════════════════════════════════
+    function AnalyticsView() {
+      const [activePanel, setActivePanel] = useState("distribution");
+
+      // Simulated data matching DB structure
+      const tierDist = [
+        { tier: "BRIGHT_GREEN", count: 1002, pct: 25.5, pd: 1.5, color: "#27AE60" },
+        { tier: "GREEN",        count: 998,  pct: 25.4, pd: 3.5, color: "#2ECC71" },
+        { tier: "YELLOW",       count: 935,  pct: 23.8, pd: 7.0, color: "#F39C12" },
+        { tier: "RED",          count: 590,  pct: 15.0, pd: 15.0, color: "#E74C3C" },
+      ];
+
+      const factorContrib = [
+        { factor: "CRIF",          avg: 8.2,  min: -25, max: 20,  obs: 92 },
+        { factor: "LTV",           avg: 6.1,  min: -18, max: 36,  obs: 100 },
+        { factor: "DSCR",          avg: 2.4,  min: -6,  max: 9,   obs: 87 },
+        { factor: "Term",          avg: 14.2, min: -7,  max: 25,  obs: 100 },
+        { factor: "Age",           avg: 3.1,  min: -16, max: 28,  obs: 94 },
+        { factor: "Permit",        avg: 2.8,  min: -6,  max: 7,   obs: 76 },
+        { factor: "Intrum",        avg: 1.9,  min: -7,  max: 8,   obs: 88 },
+        { factor: "ZEK",           avg: 3.2,  min: -15, max: 5,   obs: 91 },
+        { factor: "DealerRisk",    avg: 1.1,  min: -10, max: 5,   obs: 100 },
+        { factor: "VehiclePrice",  avg: 0.8,  min: -15, max: 5,   obs: 100 },
+      ];
+
+      const brFreq = [
+        { rule: "BR-01", desc: "Minor (<18)",           triggers: 4,  pct: 0.1 },
+        { rule: "BR-02", desc: "LTV > 120%",            triggers: 31, pct: 0.8 },
+        { rule: "BR-03", desc: "Negative DSCR",         triggers: 58, pct: 1.5 },
+        { rule: "BR-04", desc: "3+ ZEK entries",        triggers: 22, pct: 0.6 },
+        { rule: "BR-05", desc: "CRIF < 150",            triggers: 89, pct: 2.3 },
+        { rule: "BR-06", desc: "No income (B2C)",       triggers: 14, pct: 0.4 },
+        { rule: "BR-07", desc: "Dealer DR > 20%",       triggers: 47, pct: 1.2 },
+        { rule: "BR-08", desc: "Term > 72m",            triggers: 8,  pct: 0.2 },
+      ];
+
+      const vintageData = [
+        { q: "2022 Q2", dr: 9.2,  score: 18.4 },
+        { q: "2022 Q3", dr: 10.3, score: 17.1 },
+        { q: "2022 Q4", dr: 9.0,  score: 19.2 },
+        { q: "2023 Q1", dr: 13.8, score: 14.6 },
+        { q: "2023 Q3", dr: 3.8,  score: 22.1 },
+        { q: "2023 Q4", dr: 4.7,  score: 21.8 },
+        { q: "2024 Q1", dr: 2.6,  score: 23.5 },
+        { q: "2024 Q3", dr: 2.9,  score: 22.9 },
+        { q: "2025 Q4", dr: 1.5,  score: 24.7 },
+      ];
+
+      const maxDR = Math.max(...vintageData.map(v => v.dr));
+      const maxScore = Math.max(...vintageData.map(v => v.score));
+
+      const panels = [
+        { key: "distribution", label: "Tier Distribution" },
+        { key: "factors",      label: "Factor Contributions" },
+        { key: "rules",        label: "Business Rule Triggers" },
+        { key: "vintage",      label: "Vintage Performance" },
+        { key: "queries",      label: "Sample Analytics Queries" },
+      ];
+
+      return (
+        <div className="fade-in">
+          <h2 style={{ fontSize: "17px", fontWeight: 700, marginBottom: "6px" }}>Analytics Capabilities</h2>
+          <p style={{ fontSize: "12px", color: "#64748B", marginBottom: "16px" }}>All data sourced from <span style={{ fontFamily: "monospace", color: "#38BDF8" }}>lt_risk_engine</span> schema. Simulated values based on Feb 2026 portfolio backtest.</p>
+
+          <div style={{ display: "flex", gap: "8px", marginBottom: "20px", flexWrap: "wrap" }}>
+            {panels.map(p => (
+              <button key={p.key} onClick={() => setActivePanel(p.key)}
+                style={{ padding: "7px 14px", borderRadius: "6px", border: "1px solid", cursor: "pointer", fontSize: "12px", fontWeight: 600,
+                  background: activePanel === p.key ? "#1D4ED822" : "transparent",
+                  borderColor: activePanel === p.key ? "#38BDF8" : "#334155",
+                  color: activePanel === p.key ? "#38BDF8" : "#94A3B8" }}>{p.label}</button>
+            ))}
+          </div>
+
+          {activePanel === "distribution" && (
+            <div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px", marginBottom: "20px" }}>
+                {tierDist.map((t, i) => (
+                  <div key={i} style={{ background: "#1E293B", borderRadius: 10, padding: "16px", borderLeft: `4px solid ${t.color}` }}>
+                    <div style={{ fontSize: "12px", fontWeight: 700, color: t.color, marginBottom: 6 }}>{t.tier}</div>
+                    <div style={{ fontSize: "26px", fontWeight: 800, color: "#E2E8F0" }}>{t.pct}%</div>
+                    <div style={{ fontSize: "11px", color: "#64748B", marginTop: 2 }}>{t.count.toLocaleString()} contracts</div>
+                    <div style={{ fontSize: "11px", color: "#94A3B8", marginTop: 6 }}>Model PD: <strong style={{ color: t.color }}>{t.pd}%</strong></div>
+                    <div style={{ height: 4, borderRadius: 2, background: t.color + "44", marginTop: 8 }}>
+                      <div style={{ height: "100%", borderRadius: 2, background: t.color, width: `${t.pct * 2.5}%` }}></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="note-box">
+                <strong style={{ color: "#F59E0B" }}>Query (risk_assessment):</strong>
+                <span style={{ fontFamily: "monospace", color: "#94A3B8", fontSize: 11 }}> SELECT tier, COUNT(*), ROUND(100.0*COUNT(*)/SUM(COUNT(*)) OVER(),1) AS pct FROM lt_risk_engine.risk_assessment GROUP BY tier ORDER BY COUNT(*) DESC;</span>
+              </div>
+            </div>
+          )}
+
+          {activePanel === "factors" && (
+            <div>
+              <div style={{ background: "#1E293B", borderRadius: 10, padding: "16px" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 60px 60px 60px", gap: "8px", marginBottom: "10px",
+                  fontSize: "10px", fontWeight: 700, color: "#64748B", textTransform: "uppercase", borderBottom: "1px solid #334155", paddingBottom: 8 }}>
+                  <span>Factor</span><span>Avg Score (bar)</span><span style={{ textAlign: "right" }}>Avg</span><span style={{ textAlign: "right" }}>Min</span><span style={{ textAlign: "right" }}>Max</span>
+                </div>
+                {factorContrib.map((f, i) => (
+                  <div key={i} style={{ display: "grid", gridTemplateColumns: "120px 1fr 60px 60px 60px", gap: "8px",
+                    alignItems: "center", padding: "7px 0", borderBottom: "1px solid #1E293B" }}>
+                    <span style={{ fontFamily: "monospace", fontSize: 12, color: "#38BDF8" }}>{f.factor}</span>
+                    <div style={{ position: "relative", height: 16, background: "#0F172A", borderRadius: 4, overflow: "hidden" }}>
+                      <div style={{ position: "absolute", left: "50%", top: 0, height: "100%",
+                        width: `${(f.avg / 40) * 50}%`, background: f.avg >= 0 ? "#22C55E" : "#EF4444",
+                        borderRadius: "0 4px 4px 0", opacity: 0.8 }}></div>
+                      <div style={{ position: "absolute", left: "50%", top: "20%", height: "60%", width: 1, background: "#475569" }}></div>
+                      <span style={{ position: "absolute", right: 4, top: 2, fontSize: 9, color: "#94A3B8" }}>{f.obs}% obs</span>
+                    </div>
+                    <span style={{ textAlign: "right", fontFamily: "monospace", fontSize: 12, color: f.avg >= 0 ? "#22C55E" : "#EF4444" }}>{f.avg > 0 ? "+" : ""}{f.avg}</span>
+                    <span style={{ textAlign: "right", fontFamily: "monospace", fontSize: 12, color: "#EF4444" }}>{f.min}</span>
+                    <span style={{ textAlign: "right", fontFamily: "monospace", fontSize: 12, color: "#22C55E" }}>+{f.max}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="note-box" style={{ marginTop: 12 }}>
+                <strong style={{ color: "#F59E0B" }}>Query:</strong>
+                <span style={{ fontFamily: "monospace", color: "#94A3B8", fontSize: 11 }}> SELECT elem->>'factor_name' AS factor, AVG((elem->>'raw_score')::numeric) AS avg_score FROM lt_risk_engine.risk_assessment, jsonb_array_elements(factor_scores_json) AS elem GROUP BY 1 ORDER BY avg_score DESC;</span>
+              </div>
+            </div>
+          )}
+
+          {activePanel === "rules" && (
+            <div>
+              <div style={{ background: "#1E293B", borderRadius: 10, padding: "16px" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "80px 1fr 80px 80px", gap: "8px",
+                  fontSize: "10px", fontWeight: 700, color: "#64748B", textTransform: "uppercase",
+                  borderBottom: "1px solid #334155", paddingBottom: 8, marginBottom: 10 }}>
+                  <span>Rule</span><span>Description</span><span style={{ textAlign: "right" }}>Triggers</span><span style={{ textAlign: "right" }}>% of Volume</span>
+                </div>
+                {brFreq.sort((a,b) => b.triggers - a.triggers).map((r, i) => (
+                  <div key={i} style={{ display: "grid", gridTemplateColumns: "80px 1fr 80px 80px",
+                    gap: "8px", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #0F172A" }}>
+                    <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: "#F59E0B" }}>{r.rule}</span>
+                    <div>
+                      <span style={{ fontSize: 12, color: "#E2E8F0" }}>{r.desc}</span>
+                      <div style={{ height: 4, borderRadius: 2, background: "#0F172A", marginTop: 4 }}>
+                        <div style={{ height: "100%", borderRadius: 2, background: "#F59E0B", width: `${(r.triggers / 89) * 100}%`, opacity: 0.7 }}></div>
+                      </div>
+                    </div>
+                    <span style={{ textAlign: "right", fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: "#E2E8F0" }}>{r.triggers}</span>
+                    <span style={{ textAlign: "right", fontFamily: "monospace", fontSize: 12, color: "#94A3B8" }}>{r.pct}%</span>
+                  </div>
+                ))}
+              </div>
+              <div className="note-box" style={{ marginTop: 12 }}>
+                <strong style={{ color: "#F59E0B" }}>Query:</strong>
+                <span style={{ fontFamily: "monospace", color: "#94A3B8", fontSize: 11 }}> SELECT elem->>'rule_code' AS rule, COUNT(*) AS triggers, ROUND(100.0*COUNT(*)/SUM(COUNT(*)) OVER(),2) AS pct FROM lt_risk_engine.risk_assessment, jsonb_array_elements(rules_triggered_json) AS elem GROUP BY 1 ORDER BY COUNT(*) DESC;</span>
+              </div>
+            </div>
+          )}
+
+          {activePanel === "vintage" && (
+            <div>
+              <div style={{ background: "#1E293B", borderRadius: 10, padding: "16px" }}>
+                <div style={{ marginBottom: "12px", display: "flex", gap: 20 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><div style={{ width: 12, height: 4, background: "#EF4444", borderRadius: 2 }}></div><span style={{ color: "#94A3B8" }}>Observed Default Rate (%)</span></div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}><div style={{ width: 12, height: 4, background: "#38BDF8", borderRadius: 2 }}></div><span style={{ color: "#94A3B8" }}>Avg Composite Score</span></div>
+                </div>
+                <div style={{ display: "flex", gap: "8px", alignItems: "flex-end", height: 200, padding: "0 8px" }}>
+                  {vintageData.map((v, i) => (
+                    <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                      <div style={{ fontSize: 9, color: "#EF4444", fontFamily: "monospace" }}>{v.dr}%</div>
+                      <div style={{ width: "100%", display: "flex", gap: 2 }}>
+                        <div style={{ flex: 1, height: `${(v.dr / maxDR) * 140}px`, background: "#EF444466", border: "1px solid #EF4444", borderRadius: "3px 3px 0 0", transition: "height 0.5s" }}></div>
+                        <div style={{ flex: 1, height: `${(v.score / maxScore) * 140}px`, background: "#38BDF822", border: "1px solid #38BDF8", borderRadius: "3px 3px 0 0", transition: "height 0.5s" }}></div>
+                      </div>
+                      <div style={{ fontSize: 8, color: "#64748B", textAlign: "center", transform: "rotate(-45deg)", transformOrigin: "top left", marginTop: 8, whiteSpace: "nowrap" }}>{v.q}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="note-box" style={{ marginTop: 12 }}>
+                <strong style={{ color: "#F59E0B" }}>Source:</strong>
+                <span style={{ color: "#94A3B8", fontSize: 11 }}> dwh.dim_contract vintaged by open_dt. Default = dpd≥90 OR wo_amt_ltd&gt;0. Stored in lt_risk_engine.population_segment_performance after quarterly batch.</span>
+              </div>
+            </div>
+          )}
+
+          {activePanel === "queries" && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+              {[
+                { title: "Score distribution by month", sql: `SELECT DATE_TRUNC('month', evaluated_at) AS month,\n  AVG(composite_score) AS avg_score,\n  COUNT(*) AS total,\n  SUM(CASE WHEN tier='RED' THEN 1 ELSE 0 END) AS reds\nFROM lt_risk_engine.risk_assessment\nGROUP BY 1 ORDER BY 1;` },
+                { title: "Missing field frequency (data quality)", sql: `SELECT field_name,\n  COUNT(*) AS times_defaulted,\n  AVG(impact_on_score) AS avg_score_impact\nFROM lt_risk_engine.scoring_defaults_applied\nGROUP BY field_name\nORDER BY COUNT(*) DESC LIMIT 10;` },
+                { title: "Dealer risk watchlist", sql: `SELECT dealer_id, dealer_name,\n  current_default_rate,\n  default_rate_trend,\n  active_contracts, is_watchlist\nFROM lt_risk_engine.dealer_risk_metrics\nWHERE is_watchlist = true\nORDER BY current_default_rate DESC;` },
+                { title: "Model drift: actual vs predicted PD", sql: `SELECT segment_key,\n  observed_default_rate,\n  predicted_default_rate,\n  ROUND(observed_default_rate/NULLIF(predicted_default_rate,0),2) AS calibration_ratio,\n  woe_drift\nFROM lt_risk_engine.population_segment_performance\nWHERE snapshot_date = (SELECT MAX(snapshot_date)\n  FROM lt_risk_engine.population_segment_performance)\nORDER BY ABS(woe_drift) DESC;` },
+                { title: "Scoring latency SLA", sql: `SELECT DATE_TRUNC('day', evaluated_at) AS day,\n  AVG(processing_time_ms) AS avg_ms,\n  PERCENTILE_CONT(0.95) WITHIN GROUP\n    (ORDER BY processing_time_ms) AS p95_ms,\n  COUNT(*) FILTER (WHERE processing_time_ms > 300) AS sla_breaches\nFROM lt_risk_engine.risk_assessment\nGROUP BY 1 ORDER BY 1 DESC LIMIT 30;` },
+                { title: "Legacy A-E band distribution", sql: `SELECT legacy_band,\n  COUNT(*) AS count,\n  ROUND(AVG(composite_score),1) AS avg_v12_score,\n  ROUND(100.0*COUNT(*)/SUM(COUNT(*)) OVER(),1) AS pct\nFROM lt_risk_engine.risk_assessment\nWHERE legacy_band IS NOT NULL\nGROUP BY legacy_band\nORDER BY legacy_band;` },
+              ].map((q, i) => (
+                <div key={i} style={{ background: "#1E293B", borderRadius: 10, padding: "14px", border: "1px solid #334155" }}>
+                  <div style={{ fontSize: "12px", fontWeight: 700, color: "#38BDF8", marginBottom: 8 }}>{q.title}</div>
+                  <pre style={{ fontFamily: "'SF Mono','Fira Code',monospace", fontSize: 10.5, color: "#A78BFA", background: "#0F172A", padding: "10px 12px",
+                    borderRadius: 6, overflow: "auto", whiteSpace: "pre-wrap", margin: 0, lineHeight: 1.7 }}>{q.sql}</pre>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ═══════════════════════════════════════════
     // MAIN APP
     // ═══════════════════════════════════════════
     function App() {
@@ -574,17 +1020,21 @@
           </div>
           <div style={{ maxWidth: "1200px", margin: "0 auto", padding: "0 24px", borderBottom: "1px solid #334155" }}>
             {[
-              { key: "pipeline", label: "▶ Pipeline Simulator" },
-              { key: "io", label: "{ } Input / Output JSON" },
+              { key: "pipeline",     label: "▶ Pipeline Simulator" },
+              { key: "io",           label: "{ } Input / Output JSON" },
               { key: "architecture", label: "🏗 Architecture Diagram" },
+              { key: "erd",          label: "⚙ Data Model (ERD)" },
+              { key: "analytics",    label: "📊 Analytics" },
             ].map(t => (
               <button key={t.key} className={`tab-btn ${view === t.key ? "active" : ""}`} onClick={() => setView(t.key)}>{t.label}</button>
             ))}
           </div>
           <div style={{ maxWidth: "1200px", margin: "0 auto", padding: "24px" }}>
-            {view === "pipeline" && <PipelineSimulator />}
-            {view === "io" && <InputOutputView />}
+            {view === "pipeline"     && <PipelineSimulator />}
+            {view === "io"           && <InputOutputView />}
             {view === "architecture" && <ArchitectureDiagram />}
+            {view === "erd"          && <ERDiagram />}
+            {view === "analytics"    && <AnalyticsView />}
           </div>
           <div style={{ textAlign: "center", padding: "20px", color: "#475569", fontSize: "11px" }}>LT Risk Engine v1.2.0 — Flow Visualization — Aralytiks LLC</div>
         </div>
