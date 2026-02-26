@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LT Risk Engine — Calibration UI</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; }
+    .toggle-track { width: 36px; height: 20px; border-radius: 10px; position: relative; cursor: pointer; transition: background 0.2s; }
+    .toggle-thumb { width: 16px; height: 16px; border-radius: 50%; background: #fff; position: absolute; top: 2px; transition: transform 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+    .toggle-on { background: #22C55E; }
+    .toggle-on .toggle-thumb { transform: translateX(16px); }
+    .toggle-off { background: #D1D5DB; }
+    .toggle-off .toggle-thumb { transform: translateX(2px); }
+    input[type=number]::-webkit-inner-spin-button { opacity: 0.5; }
+    .tab-active { border-bottom: 2px solid #2563EB; color: #1D4ED8; }
+    .tab-inactive { border-bottom: 2px solid transparent; color: #6B7280; }
+    .tab-inactive:hover { color: #374151; border-color: #D1D5DB; }
+    .gauge-ring { transition: stroke-dashoffset 0.6s ease; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useCallback, useMemo } = React;
+
+    // ── Icons (inline SVGs to avoid CDN dependency) ──
+    const Icon = ({ d, size = 16, className = "" }) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+        <path d={d} />
+      </svg>
+    );
+    const Icons = {
+      BarChart: () => <Icon d="M18 20V10M12 20V4M6 20v-6" />,
+      Settings: () => <Icon d="M12 15a3 3 0 100-6 3 3 0 000 6z" />,
+      Shield: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>,
+      Clock: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
+      Check: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>,
+      Alert: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
+      Save: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>,
+      ChevronDown: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>,
+      ChevronRight: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>,
+      Refresh: () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>,
+      Play: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>,
+      User: () => <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
+    };
+
+    // ── Mock data matching v1.2 seed ──
+    const INITIAL_FACTORS = [
+      { factor_name: "LTV", weight: 0.15, enabled: true, description: "Loan-to-Value ratio", score_range_min: -8, score_range_max: 8, display_order: 1 },
+      { factor_name: "Term", weight: 0.10, enabled: true, description: "Contract term length", score_range_min: -3, score_range_max: 6, display_order: 2 },
+      { factor_name: "Age", weight: 0.10, enabled: true, description: "Customer age at application", score_range_min: -10, score_range_max: 7, display_order: 3 },
+      { factor_name: "CRIF", weight: 0.15, enabled: true, description: "CRIF bureau score", score_range_min: -8, score_range_max: 8, display_order: 4 },
+      { factor_name: "Intrum", weight: 0.10, enabled: true, description: "Intrum collection score", score_range_min: -4, score_range_max: 5, display_order: 5 },
+      { factor_name: "DSCR", weight: 0.15, enabled: true, description: "Debt Service Coverage Ratio", score_range_min: -8, score_range_max: 7, display_order: 6 },
+      { factor_name: "Permit", weight: 0.10, enabled: true, description: "Party type + residence permit", score_range_min: -3, score_range_max: 5, display_order: 7 },
+      { factor_name: "VehiclePriceTier", weight: 0.05, enabled: true, description: "Vehicle price segment", score_range_min: -2, score_range_max: 3, display_order: 8 },
+      { factor_name: "ZEK", weight: 0.05, enabled: true, description: "ZEK credit entries", score_range_min: -7, score_range_max: 5, display_order: 9 },
+      { factor_name: "DealerRisk", weight: 0.05, enabled: true, description: "Dealer default rate", score_range_min: -6, score_range_max: 4, display_order: 10 },
+    ];
+
+    const INITIAL_BINS = {
+      LTV: [
+        { id: 1, bin_order: 1, bin_label: "<75%", lower_bound: null, upper_bound: 75, raw_score: 8, risk_interpretation: "Strong equity cushion" },
+        { id: 2, bin_order: 2, bin_label: "75-85%", lower_bound: 75, upper_bound: 85, raw_score: 4, risk_interpretation: "Adequate equity" },
+        { id: 3, bin_order: 3, bin_label: "85-95%", lower_bound: 85, upper_bound: 95, raw_score: 0, risk_interpretation: "Neutral" },
+        { id: 4, bin_order: 4, bin_label: ">95%", lower_bound: 95, upper_bound: null, raw_score: -8, risk_interpretation: "Minimal equity" },
+        { id: 5, bin_order: 5, bin_label: "MISSING", lower_bound: null, upper_bound: null, raw_score: -5, risk_interpretation: "Cannot assess", is_missing_bin: true },
+      ],
+      Term: [
+        { id: 6, bin_order: 1, bin_label: "≤36m", lower_bound: null, upper_bound: 36, raw_score: 5, risk_interpretation: "Short term" },
+        { id: 7, bin_order: 2, bin_label: "37-48m", lower_bound: 37, upper_bound: 48, raw_score: 6, risk_interpretation: "Optimal term" },
+        { id: 8, bin_order: 3, bin_label: ">48m", lower_bound: 48, upper_bound: null, raw_score: -3, risk_interpretation: "Long exposure" },
+      ],
+      Age: [
+        { id: 9, bin_order: 1, bin_label: "<18", lower_bound: null, upper_bound: 18, raw_score: -10, risk_interpretation: "Minor" },
+        { id: 10, bin_order: 2, bin_label: "18-25", lower_bound: 18, upper_bound: 25, raw_score: -6, risk_interpretation: "Young adult" },
+        { id: 11, bin_order: 3, bin_label: "26-35", lower_bound: 26, upper_bound: 35, raw_score: 2, risk_interpretation: "Early career" },
+        { id: 12, bin_order: 4, bin_label: "36-45", lower_bound: 36, upper_bound: 45, raw_score: 0, risk_interpretation: "Mid career" },
+        { id: 13, bin_order: 5, bin_label: "46-55", lower_bound: 46, upper_bound: 55, raw_score: 7, risk_interpretation: "Peak earning" },
+        { id: 14, bin_order: 6, bin_label: "56+", lower_bound: 56, upper_bound: null, raw_score: -2, risk_interpretation: "Senior" },
+      ],
+      CRIF: [
+        { id: 15, bin_order: 1, bin_label: "≥700 (Excellent)", lower_bound: 700, upper_bound: null, raw_score: 8, risk_interpretation: "Top creditworthiness" },
+        { id: 16, bin_order: 2, bin_label: "500-699 (Good)", lower_bound: 500, upper_bound: 699, raw_score: 4, risk_interpretation: "Above average" },
+        { id: 17, bin_order: 3, bin_label: "300-499 (Fair)", lower_bound: 300, upper_bound: 499, raw_score: -2, risk_interpretation: "Below average" },
+        { id: 18, bin_order: 4, bin_label: "<300 (Poor)", lower_bound: null, upper_bound: 300, raw_score: -8, risk_interpretation: "Serious issues" },
+        { id: 19, bin_order: 5, bin_label: "MISSING", lower_bound: null, upper_bound: null, raw_score: -5, risk_interpretation: "No data", is_missing_bin: true },
+      ],
+      Intrum: [
+        { id: 20, bin_order: 1, bin_label: "0 (No data)", lower_bound: null, upper_bound: null, raw_score: -4, risk_interpretation: "Unverifiable" },
+        { id: 21, bin_order: 2, bin_label: "1", lower_bound: null, upper_bound: null, raw_score: 1, risk_interpretation: "Minimal history" },
+        { id: 22, bin_order: 3, bin_label: "2-3", lower_bound: 2, upper_bound: 3, raw_score: -1, risk_interpretation: "Some concerns" },
+        { id: 23, bin_order: 4, bin_label: ">3 (Established)", lower_bound: 3, upper_bound: null, raw_score: 5, risk_interpretation: "Proven behaviour" },
+      ],
+      DSCR: [
+        { id: 24, bin_order: 1, bin_label: "<0 (Negative)", lower_bound: null, upper_bound: 0, raw_score: -8, risk_interpretation: "Cannot service" },
+        { id: 25, bin_order: 2, bin_label: "0-3 (Tight)", lower_bound: 0, upper_bound: 3, raw_score: -3, risk_interpretation: "Minimal headroom" },
+        { id: 26, bin_order: 3, bin_label: "3-7 (Adequate)", lower_bound: 3, upper_bound: 7, raw_score: 0, risk_interpretation: "Meets minimum" },
+        { id: 27, bin_order: 4, bin_label: "7-15 (Good)", lower_bound: 7, upper_bound: 15, raw_score: 3, risk_interpretation: "Comfortable" },
+        { id: 28, bin_order: 5, bin_label: ">15 (Strong)", lower_bound: 15, upper_bound: null, raw_score: 7, risk_interpretation: "Very strong" },
+        { id: 29, bin_order: 6, bin_label: "MISSING", lower_bound: null, upper_bound: null, raw_score: -5, risk_interpretation: "Cannot calculate", is_missing_bin: true },
+      ],
+      Permit: [
+        { id: 30, bin_order: 1, bin_label: "B2B", lower_bound: null, upper_bound: null, raw_score: -3, risk_interpretation: "Business applicant" },
+        { id: 31, bin_order: 2, bin_label: "B_permit", lower_bound: null, upper_bound: null, raw_score: -3, risk_interpretation: "Temporary residence" },
+        { id: 32, bin_order: 3, bin_label: "C_permit", lower_bound: null, upper_bound: null, raw_score: 5, risk_interpretation: "Permanent settlement" },
+        { id: 33, bin_order: 4, bin_label: "L/Diplomat", lower_bound: null, upper_bound: null, raw_score: -1, risk_interpretation: "Short-term" },
+        { id: 34, bin_order: 5, bin_label: "Other_B2C", lower_bound: null, upper_bound: null, raw_score: 2, risk_interpretation: "Default category" },
+      ],
+      VehiclePriceTier: [
+        { id: 35, bin_order: 1, bin_label: "≤20k (Economy)", lower_bound: null, upper_bound: 20000, raw_score: -2, risk_interpretation: "Higher LGD" },
+        { id: 36, bin_order: 2, bin_label: "20k-50k (Mid)", lower_bound: 20000, upper_bound: 50000, raw_score: 3, risk_interpretation: "Best recovery" },
+        { id: 37, bin_order: 3, bin_label: "50k-100k (Premium)", lower_bound: 50000, upper_bound: 100000, raw_score: 2, risk_interpretation: "Good collateral" },
+        { id: 38, bin_order: 4, bin_label: ">100k (Luxury)", lower_bound: 100000, upper_bound: null, raw_score: -1, risk_interpretation: "Concentration risk" },
+      ],
+      ZEK: [
+        { id: 39, bin_order: 1, bin_label: "Clean", lower_bound: null, upper_bound: null, raw_score: 5, risk_interpretation: "No negatives" },
+        { id: 40, bin_order: 2, bin_label: "1 entry", lower_bound: null, upper_bound: null, raw_score: -3, risk_interpretation: "Isolated incident" },
+        { id: 41, bin_order: 3, bin_label: "2+ entries", lower_bound: null, upper_bound: null, raw_score: -7, risk_interpretation: "Pattern" },
+        { id: 42, bin_order: 4, bin_label: "NOT_CHECKED", lower_bound: null, upper_bound: null, raw_score: 0, risk_interpretation: "Not queried", is_missing_bin: true },
+      ],
+      DealerRisk: [
+        { id: 43, bin_order: 1, bin_label: "≤3% (Low)", lower_bound: null, upper_bound: 0.03, raw_score: 4, risk_interpretation: "Trusted" },
+        { id: 44, bin_order: 2, bin_label: "3-8% (Average)", lower_bound: 0.03, upper_bound: 0.08, raw_score: 0, risk_interpretation: "Normal" },
+        { id: 45, bin_order: 3, bin_label: "8-15% (Elevated)", lower_bound: 0.08, upper_bound: 0.15, raw_score: -3, risk_interpretation: "Under watch" },
+        { id: 46, bin_order: 4, bin_label: ">15% (High)", lower_bound: 0.15, upper_bound: null, raw_score: -6, risk_interpretation: "Watchlist" },
+        { id: 47, bin_order: 5, bin_label: "New/Unknown", lower_bound: null, upper_bound: null, raw_score: -2, risk_interpretation: "Unproven", is_missing_bin: true },
+      ],
+    };
+
+    const INITIAL_TIERS = [
+      { id: 1, tier_name: "BRIGHT_GREEN", tier_order: 1, min_score: 25, decision: "AUTO_APPROVE", estimated_pd: 0.015, color_hex: "#27AE60", description: "Auto-approve" },
+      { id: 2, tier_name: "GREEN", tier_order: 2, min_score: 10, decision: "APPROVE_STANDARD", estimated_pd: 0.035, color_hex: "#2ECC71", description: "Standard approval" },
+      { id: 3, tier_name: "YELLOW", tier_order: 3, min_score: 0, decision: "MANUAL_REVIEW", estimated_pd: 0.07, color_hex: "#F39C12", description: "Credit analyst review" },
+      { id: 4, tier_name: "RED", tier_order: 4, min_score: null, decision: "DECLINE", estimated_pd: 0.15, color_hex: "#E74C3C", description: "Decline" },
+    ];
+
+    const INITIAL_RULES = [
+      { id: 1, rule_code: "BR-01", rule_name: "Minor applicant", condition_field: "age", condition_operator: "<", condition_value: "18", enabled: true, severity: "HARD" },
+      { id: 2, rule_code: "BR-02", rule_name: "Extreme over-financing", condition_field: "ltv", condition_operator: ">", condition_value: "120", enabled: true, severity: "HARD" },
+      { id: 3, rule_code: "BR-03", rule_name: "Negative DSCR", condition_field: "dscr_value", condition_operator: "<", condition_value: "0", enabled: true, severity: "HARD" },
+      { id: 4, rule_code: "BR-04", rule_name: "Multiple ZEK negatives", condition_field: "zek_entry_count", condition_operator: ">=", condition_value: "3", enabled: true, severity: "HARD" },
+      { id: 5, rule_code: "BR-05", rule_name: "Critical CRIF score", condition_field: "crif_score", condition_operator: "<", condition_value: "150", enabled: true, severity: "HARD" },
+      { id: 6, rule_code: "BR-06", rule_name: "No income data (B2C)", condition_field: "monthly_net_income", condition_operator: "<=", condition_value: "0", enabled: true, severity: "HARD" },
+      { id: 7, rule_code: "BR-07", rule_name: "Watchlist dealer", condition_field: "dealer_default_rate", condition_operator: ">", condition_value: "0.20", enabled: true, severity: "HARD" },
+      { id: 8, rule_code: "BR-08", rule_name: "Excessive term", condition_field: "term_months", condition_operator: ">", condition_value: "72", enabled: true, severity: "HARD" },
+    ];
+
+    const AUDIT_LOG = [
+      { changed_at: "2026-02-26T14:30:00Z", changed_by: "avi.kannan", action: "PUBLISHED", table_name: "model_version", field_name: null, old_value: null, new_value: "1.2.0" },
+      { changed_at: "2026-02-26T14:28:00Z", changed_by: "avi.kannan", action: "UPDATED", table_name: "scoring_factor_bins", field_name: "raw_score", old_value: "-6", new_value: "-8" },
+      { changed_at: "2026-02-26T14:25:00Z", changed_by: "system", action: "CREATED", table_name: "model_version", field_name: null, old_value: null, new_value: "1.2.0" },
+    ];
+
+    // ── Score bar component ──
+    function ScoreBar({ score, min, max }) {
+      const range = max - min;
+      const pct = Math.max(0, Math.min(100, ((score - min) / range) * 100));
+      const color = score > 0 ? "#27AE60" : score < 0 ? "#E74C3C" : "#95A5A6";
+      const zeroPct = Math.max(0, Math.min(100, ((0 - min) / range) * 100));
+      return (
+        <div style={{ position: "relative", width: "100%", height: "20px", background: "#F3F4F6", borderRadius: "4px", overflow: "hidden" }}>
+          <div style={{ position: "absolute", top: 0, height: "100%", width: "1px", background: "#9CA3AF", left: `${zeroPct}%` }} />
+          <div style={{
+            position: "absolute", top: 0, height: "100%", borderRadius: "4px",
+            left: score >= 0 ? `${zeroPct}%` : `${pct}%`,
+            width: `${Math.abs(pct - zeroPct)}%`,
+            backgroundColor: color, opacity: 0.7,
+          }} />
+          <span style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: "bold", color: "#374151" }}>
+            {score > 0 ? "+" : ""}{score}
+          </span>
+        </div>
+      );
+    }
+
+    // ── Score Gauge for Simulator ──
+    function ScoreGauge({ score, tier, color }) {
+      const minS = -50, maxS = 50;
+      const clamped = Math.max(minS, Math.min(maxS, score));
+      const pct = ((clamped - minS) / (maxS - minS));
+      const circumference = 2 * Math.PI * 60;
+      const halfCirc = circumference * 0.75;
+      const offset = halfCirc - (pct * halfCirc);
+      return (
+        <div style={{ textAlign: "center" }}>
+          <svg width="180" height="130" viewBox="0 0 180 130">
+            <path d="M 20 110 A 60 60 0 1 1 160 110" fill="none" stroke="#E5E7EB" strokeWidth="12" strokeLinecap="round" />
+            <path d="M 20 110 A 60 60 0 1 1 160 110" fill="none" stroke={color} strokeWidth="12" strokeLinecap="round"
+              strokeDasharray={`${halfCirc}`} strokeDashoffset={offset} className="gauge-ring" />
+            <text x="90" y="85" textAnchor="middle" fontSize="32" fontWeight="bold" fill="#1F2937">{score.toFixed(1)}</text>
+            <text x="90" y="105" textAnchor="middle" fontSize="12" fill={color} fontWeight="600">{tier}</text>
+          </svg>
+        </div>
+      );
+    }
+
+    // ── Simulator: compute score from inputs ──
+    function computeScore(inputs, factors, bins, tiers, rules) {
+      const result = { factorScores: {}, totalWeightedScore: 0, tier: null, decision: null, color: "#6B7280", triggeredRules: [], ruleBlocked: false };
+
+      // Check business rules
+      const ruleFieldMap = {
+        age: inputs.age, ltv: inputs.ltv, dscr_value: inputs.dscr,
+        zek_entry_count: inputs.zek === "Clean" ? 0 : inputs.zek === "1 entry" ? 1 : inputs.zek === "2+ entries" ? 3 : null,
+        crif_score: inputs.crif, monthly_net_income: inputs.income, dealer_default_rate: inputs.dealerRate, term_months: inputs.term,
+      };
+      for (const r of rules) {
+        if (!r.enabled) continue;
+        const val = ruleFieldMap[r.condition_field];
+        if (val == null) continue;
+        const thresh = parseFloat(r.condition_value);
+        let triggered = false;
+        if (r.condition_operator === "<" && val < thresh) triggered = true;
+        if (r.condition_operator === "<=" && val <= thresh) triggered = true;
+        if (r.condition_operator === ">" && val > thresh) triggered = true;
+        if (r.condition_operator === ">=" && val >= thresh) triggered = true;
+        if (triggered) { result.triggeredRules.push(r); if (r.severity === "HARD") result.ruleBlocked = true; }
+      }
+
+      // Score each factor
+      const binLookup = (factorName, value, catValue) => {
+        const fb = bins[factorName];
+        if (!fb) return 0;
+        if (catValue != null) {
+          const match = fb.find(b => b.bin_label === catValue);
+          return match ? match.raw_score : 0;
+        }
+        if (value == null) {
+          const missing = fb.find(b => b.is_missing_bin);
+          return missing ? missing.raw_score : 0;
+        }
+        for (const b of fb) {
+          if (b.is_missing_bin) continue;
+          const lo = b.lower_bound, hi = b.upper_bound;
+          if (lo == null && hi != null && value <= hi) return b.raw_score;
+          if (lo != null && hi == null && value > lo) return b.raw_score;
+          if (lo != null && hi != null && value > lo && value <= hi) return b.raw_score;
+          if (lo == null && hi == null && !b.is_missing_bin) continue;
+        }
+        // fallback: first or last bin
+        return fb[0] ? fb[0].raw_score : 0;
+      };
+
+      const fScores = {
+        LTV: binLookup("LTV", inputs.ltv, null),
+        Term: binLookup("Term", inputs.term, null),
+        Age: binLookup("Age", inputs.age, null),
+        CRIF: binLookup("CRIF", inputs.crif, null),
+        Intrum: binLookup("Intrum", inputs.intrum, null),
+        DSCR: binLookup("DSCR", inputs.dscr, null),
+        Permit: binLookup("Permit", null, inputs.permit),
+        VehiclePriceTier: binLookup("VehiclePriceTier", inputs.vehiclePrice, null),
+        ZEK: binLookup("ZEK", null, inputs.zek),
+        DealerRisk: binLookup("DealerRisk", inputs.dealerRate, null),
+      };
+
+      let total = 0;
+      for (const f of factors) {
+        if (!f.enabled) continue;
+        const s = fScores[f.factor_name] || 0;
+        const weighted = s * f.weight;
+        result.factorScores[f.factor_name] = { raw: s, weighted: weighted };
+        total += weighted;
+      }
+      result.totalWeightedScore = total;
+
+      // Determine tier
+      if (result.ruleBlocked) {
+        result.tier = "BLOCKED";
+        result.decision = "HARD DECLINE (Business Rule)";
+        result.color = "#991B1B";
+      } else {
+        const sortedTiers = [...tiers].sort((a, b) => a.tier_order - b.tier_order);
+        for (const t of sortedTiers) {
+          if (t.min_score == null || total >= t.min_score) {
+            result.tier = t.tier_name;
+            result.decision = t.decision;
+            result.color = t.color_hex;
+            break;
+          }
+        }
+      }
+      return result;
+    }
+
+    // ── Sample applicant profiles for quick demo ──
+    const SAMPLE_PROFILES = {
+      "Strong Applicant": { ltv: 70, term: 42, age: 50, crif: 750, intrum: 4, dscr: 12, permit: "C_permit", vehiclePrice: 35000, zek: "Clean", dealerRate: 0.02, income: 8000 },
+      "Average Applicant": { ltv: 88, term: 48, age: 35, crif: 550, intrum: 2, dscr: 5, permit: "Other_B2C", vehiclePrice: 28000, zek: "Clean", dealerRate: 0.06, income: 5000 },
+      "Risky Applicant": { ltv: 100, term: 60, age: 22, crif: 350, intrum: 0, dscr: 1.5, permit: "B_permit", vehiclePrice: 15000, zek: "1 entry", dealerRate: 0.12, income: 3000 },
+      "Rule Breach (Minor)": { ltv: 80, term: 36, age: 17, crif: 600, intrum: 3, dscr: 8, permit: "C_permit", vehiclePrice: 25000, zek: "Clean", dealerRate: 0.03, income: 0 },
+    };
+
+    // ── Main App ──
+    function App() {
+      const [tab, setTab] = useState("factors");
+      const [factors, setFactors] = useState(INITIAL_FACTORS);
+      const [bins, setBins] = useState(INITIAL_BINS);
+      const [tiers, setTiers] = useState(INITIAL_TIERS);
+      const [rules, setRules] = useState(INITIAL_RULES);
+      const [expandedFactor, setExpandedFactor] = useState("LTV");
+      const [dirty, setDirty] = useState(false);
+      const [saveMsg, setSaveMsg] = useState(null);
+      const versionId = "1.2.0";
+
+      // Simulator state
+      const [simInputs, setSimInputs] = useState(SAMPLE_PROFILES["Strong Applicant"]);
+      const [simResult, setSimResult] = useState(null);
+      const [simRan, setSimRan] = useState(false);
+
+      const handleBinScoreChange = (factorName, binId, newScore) => {
+        setBins(prev => ({ ...prev, [factorName]: prev[factorName].map(b => b.id === binId ? { ...b, raw_score: parseFloat(newScore) || 0 } : b) }));
+        setDirty(true);
+      };
+      const handleTierChange = (tierId, field, value) => {
+        setTiers(prev => prev.map(t => t.id === tierId ? { ...t, [field]: field === "min_score" || field === "estimated_pd" ? parseFloat(value) || 0 : value } : t));
+        setDirty(true);
+      };
+      const handleRuleToggle = (ruleId) => { setRules(prev => prev.map(r => r.id === ruleId ? { ...r, enabled: !r.enabled } : r)); setDirty(true); };
+      const handleRuleValueChange = (ruleId, value) => { setRules(prev => prev.map(r => r.id === ruleId ? { ...r, condition_value: value } : r)); setDirty(true); };
+      const handleSave = () => { setDirty(false); setSaveMsg("Changes saved as draft. Publish to activate."); setTimeout(() => setSaveMsg(null), 3000); };
+      const handlePublish = () => { setDirty(false); setSaveMsg("Model v1.2.0 published successfully!"); setTimeout(() => setSaveMsg(null), 3000); };
+
+      const runSimulator = () => {
+        const res = computeScore(simInputs, factors, bins, tiers, rules);
+        setSimResult(res);
+        setSimRan(true);
+      };
+
+      const loadProfile = (name) => {
+        setSimInputs({...SAMPLE_PROFILES[name]});
+        setSimRan(false);
+        setSimResult(null);
+      };
+
+      const tabList = [
+        { key: "simulator", label: "Score Simulator", icon: <Icons.Play /> },
+        { key: "factors", label: "Scoring Factors", icon: <Icons.BarChart /> },
+        { key: "tiers", label: "Tier Thresholds", icon: <Icons.Settings /> },
+        { key: "rules", label: "Business Rules", icon: <Icons.Shield /> },
+        { key: "audit", label: "Audit Log", icon: <Icons.Clock /> },
+      ];
+
+      return (
+        <div style={{ minHeight: "100vh", background: "#F9FAFB" }}>
+          {/* Header */}
+          <div style={{ background: "#fff", borderBottom: "1px solid #E5E7EB", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
+            <div style={{ maxWidth: "1200px", margin: "0 auto", padding: "16px 24px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "12px" }}>
+                <div>
+                  <h1 style={{ fontSize: "24px", fontWeight: "bold", color: "#1F2937", margin: 0 }}>LT Risk Engine — Calibration UI</h1>
+                  <p style={{ fontSize: "13px", color: "#6B7280", margin: "4px 0 0" }}>
+                    Model <span style={{ fontFamily: "monospace", background: "#F3F4F6", padding: "2px 6px", borderRadius: "4px", color: "#1D4ED8" }}>{versionId}</span>
+                    <span style={{ marginLeft: "8px", padding: "2px 8px", background: "#D1FAE5", color: "#065F46", borderRadius: "999px", fontSize: "11px", fontWeight: 600 }}>PUBLISHED</span>
+                    <span style={{ marginLeft: "8px", color: "#9CA3AF" }}>Next calibration: May 2026</span>
+                  </p>
+                </div>
+                <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                  {dirty && (
+                    <span style={{ display: "flex", alignItems: "center", color: "#D97706", fontSize: "13px" }}>
+                      <Icons.Alert /> <span style={{ marginLeft: "4px" }}>Unsaved changes</span>
+                    </span>
+                  )}
+                  <button onClick={handleSave} style={{ padding: "8px 16px", background: "#fff", border: "1px solid #D1D5DB", borderRadius: "8px", fontSize: "13px", fontWeight: 500, color: "#374151", cursor: "pointer", display: "flex", alignItems: "center", gap: "6px" }}>
+                    <Icons.Save /> Save Draft
+                  </button>
+                  <button onClick={handlePublish} style={{ padding: "8px 16px", background: "#2563EB", border: "none", borderRadius: "8px", fontSize: "13px", fontWeight: 500, color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", gap: "6px" }}>
+                    <Icons.Check /> Publish
+                  </button>
+                </div>
+              </div>
+              {saveMsg && (
+                <div style={{ marginTop: "12px", padding: "8px 12px", background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: "6px", color: "#065F46", fontSize: "13px", display: "flex", alignItems: "center" }}>
+                  <Icons.Check /> <span style={{ marginLeft: "8px" }}>{saveMsg}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Tabs */}
+          <div style={{ maxWidth: "1200px", margin: "0 auto", padding: "0 24px" }}>
+            <div style={{ display: "flex", borderBottom: "1px solid #E5E7EB", marginTop: "16px", overflowX: "auto" }}>
+              {tabList.map(t => (
+                <button key={t.key} onClick={() => setTab(t.key)}
+                  className={tab === t.key ? "tab-active" : "tab-inactive"}
+                  style={{ display: "flex", alignItems: "center", gap: "8px", padding: "12px 20px", fontSize: "13px", fontWeight: 500, background: "none", border: "none", cursor: "pointer", whiteSpace: "nowrap", borderBottom: tab === t.key ? "2px solid #2563EB" : "2px solid transparent", color: tab === t.key ? "#1D4ED8" : "#6B7280" }}>
+                  {t.icon} {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Content */}
+          <div style={{ maxWidth: "1200px", margin: "0 auto", padding: "24px" }}>
+
+            {/* ── Simulator Tab ── */}
+            {tab === "simulator" && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "24px" }}>
+                {/* Input Panel */}
+                <div style={{ background: "#fff", borderRadius: "8px", border: "1px solid #E5E7EB", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
+                  <div style={{ padding: "16px 20px", borderBottom: "1px solid #E5E7EB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <h3 style={{ margin: 0, fontSize: "15px", fontWeight: 600, color: "#1F2937" }}>Applicant Input</h3>
+                    <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                      {Object.keys(SAMPLE_PROFILES).map(name => (
+                        <button key={name} onClick={() => loadProfile(name)}
+                          style={{ padding: "4px 10px", fontSize: "11px", background: "#EFF6FF", color: "#1D4ED8", border: "1px solid #BFDBFE", borderRadius: "6px", cursor: "pointer", fontWeight: 500 }}>
+                          {name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{ padding: "20px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+                    {[
+                      { label: "LTV %", key: "ltv", type: "number", step: 1 },
+                      { label: "Term (months)", key: "term", type: "number", step: 1 },
+                      { label: "Age", key: "age", type: "number", step: 1 },
+                      { label: "CRIF Score", key: "crif", type: "number", step: 10 },
+                      { label: "Intrum Score", key: "intrum", type: "number", step: 1 },
+                      { label: "DSCR Value", key: "dscr", type: "number", step: 0.5 },
+                      { label: "Vehicle Price (CHF)", key: "vehiclePrice", type: "number", step: 1000 },
+                      { label: "Dealer Default Rate", key: "dealerRate", type: "number", step: 0.01 },
+                      { label: "Monthly Net Income", key: "income", type: "number", step: 100 },
+                    ].map(f => (
+                      <div key={f.key}>
+                        <label style={{ fontSize: "11px", fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.5px" }}>{f.label}</label>
+                        <input type={f.type} value={simInputs[f.key]} step={f.step}
+                          onChange={e => { setSimInputs(p => ({ ...p, [f.key]: parseFloat(e.target.value) || 0 })); setSimRan(false); }}
+                          style={{ width: "100%", padding: "8px 10px", border: "1px solid #D1D5DB", borderRadius: "6px", fontSize: "14px", fontFamily: "monospace", marginTop: "4px", boxSizing: "border-box" }} />
+                      </div>
+                    ))}
+                    {/* Dropdowns */}
+                    <div>
+                      <label style={{ fontSize: "11px", fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.5px" }}>Permit Type</label>
+                      <select value={simInputs.permit} onChange={e => { setSimInputs(p => ({...p, permit: e.target.value})); setSimRan(false); }}
+                        style={{ width: "100%", padding: "8px 10px", border: "1px solid #D1D5DB", borderRadius: "6px", fontSize: "14px", marginTop: "4px", boxSizing: "border-box" }}>
+                        {["B2B", "B_permit", "C_permit", "L/Diplomat", "Other_B2C"].map(o => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: "11px", fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.5px" }}>ZEK Status</label>
+                      <select value={simInputs.zek} onChange={e => { setSimInputs(p => ({...p, zek: e.target.value})); setSimRan(false); }}
+                        style={{ width: "100%", padding: "8px 10px", border: "1px solid #D1D5DB", borderRadius: "6px", fontSize: "14px", marginTop: "4px", boxSizing: "border-box" }}>
+                        {["Clean", "1 entry", "2+ entries", "NOT_CHECKED"].map(o => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{ padding: "16px 20px", borderTop: "1px solid #E5E7EB" }}>
+                    <button onClick={runSimulator}
+                      style={{ width: "100%", padding: "12px", background: "#2563EB", color: "#fff", border: "none", borderRadius: "8px", fontSize: "15px", fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" }}>
+                      <Icons.Play /> Score This Applicant
+                    </button>
+                  </div>
+                </div>
+
+                {/* Result Panel */}
+                <div style={{ background: "#fff", borderRadius: "8px", border: "1px solid #E5E7EB", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
+                  <div style={{ padding: "16px 20px", borderBottom: "1px solid #E5E7EB" }}>
+                    <h3 style={{ margin: 0, fontSize: "15px", fontWeight: 600, color: "#1F2937" }}>Scoring Result</h3>
+                  </div>
+                  {!simRan ? (
+                    <div style={{ padding: "60px 20px", textAlign: "center", color: "#9CA3AF" }}>
+                      <Icons.User /><p style={{ margin: "12px 0 0" }}>Fill in applicant data and click "Score This Applicant"</p>
+                    </div>
+                  ) : simResult && (
+                    <div style={{ padding: "20px" }}>
+                      <ScoreGauge score={simResult.totalWeightedScore} tier={simResult.ruleBlocked ? "BLOCKED" : simResult.tier} color={simResult.color} />
+                      <div style={{ textAlign: "center", marginTop: "8px" }}>
+                        <span style={{ display: "inline-block", padding: "4px 16px", borderRadius: "999px", fontSize: "13px", fontWeight: 600, color: "#fff", background: simResult.color }}>
+                          {simResult.decision}
+                        </span>
+                      </div>
+
+                      {/* Triggered rules */}
+                      {simResult.triggeredRules.length > 0 && (
+                        <div style={{ marginTop: "16px", padding: "12px", background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: "8px" }}>
+                          <p style={{ margin: "0 0 6px", fontSize: "12px", fontWeight: 600, color: "#991B1B" }}>Business Rules Triggered:</p>
+                          {simResult.triggeredRules.map(r => (
+                            <div key={r.id} style={{ fontSize: "12px", color: "#991B1B", marginBottom: "2px" }}>
+                              <strong>{r.rule_code}</strong>: {r.rule_name} ({r.condition_field} {r.condition_operator} {r.condition_value}) — <em>{r.severity}</em>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Factor breakdown */}
+                      <div style={{ marginTop: "16px" }}>
+                        <p style={{ margin: "0 0 8px", fontSize: "12px", fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: "0.5px" }}>Factor Breakdown</p>
+                        <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
+                          <thead>
+                            <tr style={{ textAlign: "left", color: "#9CA3AF", fontSize: "10px", textTransform: "uppercase" }}>
+                              <th style={{ padding: "4px 0" }}>Factor</th>
+                              <th style={{ padding: "4px 0" }}>Weight</th>
+                              <th style={{ padding: "4px 0" }}>Raw</th>
+                              <th style={{ padding: "4px 0" }}>Weighted</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {factors.filter(f => f.enabled).map(f => {
+                              const fs = simResult.factorScores[f.factor_name] || { raw: 0, weighted: 0 };
+                              return (
+                                <tr key={f.factor_name} style={{ borderTop: "1px solid #F3F4F6" }}>
+                                  <td style={{ padding: "6px 0", fontWeight: 500 }}>{f.factor_name}</td>
+                                  <td style={{ padding: "6px 0", fontFamily: "monospace", color: "#6B7280" }}>{(f.weight * 100).toFixed(0)}%</td>
+                                  <td style={{ padding: "6px 0", fontFamily: "monospace", color: fs.raw >= 0 ? "#059669" : "#DC2626" }}>{fs.raw > 0 ? "+" : ""}{fs.raw}</td>
+                                  <td style={{ padding: "6px 0", fontFamily: "monospace", fontWeight: 600, color: fs.weighted >= 0 ? "#059669" : "#DC2626" }}>{fs.weighted > 0 ? "+" : ""}{fs.weighted.toFixed(2)}</td>
+                                </tr>
+                              );
+                            })}
+                            <tr style={{ borderTop: "2px solid #D1D5DB" }}>
+                              <td colSpan="3" style={{ padding: "8px 0", fontWeight: 700, fontSize: "13px" }}>Total Weighted Score</td>
+                              <td style={{ padding: "8px 0", fontFamily: "monospace", fontWeight: 700, fontSize: "15px", color: simResult.totalWeightedScore >= 0 ? "#059669" : "#DC2626" }}>
+                                {simResult.totalWeightedScore > 0 ? "+" : ""}{simResult.totalWeightedScore.toFixed(2)}
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ── Factors Tab ── */}
+            {tab === "factors" && (
+              <div>
+                {factors.map(f => (
+                  <div key={f.factor_name} style={{ background: "#fff", borderRadius: "8px", border: "1px solid #E5E7EB", marginBottom: "8px", overflow: "hidden", boxShadow: "0 1px 2px rgba(0,0,0,0.03)" }}>
+                    <button onClick={() => setExpandedFactor(expandedFactor === f.factor_name ? null : f.factor_name)}
+                      style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 20px", background: "none", border: "none", cursor: "pointer", textAlign: "left" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                        {expandedFactor === f.factor_name ? <Icons.ChevronDown /> : <Icons.ChevronRight />}
+                        <span style={{ fontWeight: 600, color: "#1F2937" }}>{f.factor_name}</span>
+                        <span style={{ fontSize: "12px", color: "#6B7280" }}>{f.description}</span>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                        <span style={{ fontSize: "11px", background: "#EFF6FF", color: "#1D4ED8", padding: "2px 8px", borderRadius: "4px", fontFamily: "monospace" }}>{(f.weight * 100).toFixed(0)}%</span>
+                        <span style={{ fontSize: "11px", color: "#9CA3AF" }}>{f.score_range_min} to +{f.score_range_max}</span>
+                        <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: f.enabled ? "#4ADE80" : "#F87171" }} />
+                      </div>
+                    </button>
+                    {expandedFactor === f.factor_name && bins[f.factor_name] && (
+                      <div style={{ borderTop: "1px solid #F3F4F6", padding: "12px 20px", background: "#F9FAFB" }}>
+                        <table style={{ width: "100%", fontSize: "13px", borderCollapse: "collapse" }}>
+                          <thead>
+                            <tr style={{ textAlign: "left", color: "#6B7280", fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                              <th style={{ padding: "0 0 8px", width: "30px" }}>#</th>
+                              <th style={{ padding: "0 0 8px" }}>Bin</th>
+                              <th style={{ padding: "0 0 8px" }}>Boundaries</th>
+                              <th style={{ padding: "0 0 8px", width: "80px" }}>Score</th>
+                              <th style={{ padding: "0 0 8px", width: "160px" }}>Visual</th>
+                              <th style={{ padding: "0 0 8px" }}>Interpretation</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {bins[f.factor_name].map(b => (
+                              <tr key={b.id} style={{ borderTop: "1px solid #E5E7EB", background: b.is_missing_bin ? "#FFFBEB" : "transparent" }}>
+                                <td style={{ padding: "8px 0", color: "#9CA3AF" }}>{b.bin_order}</td>
+                                <td style={{ padding: "8px 0", fontWeight: 500, color: "#1F2937" }}>
+                                  {b.bin_label}
+                                  {b.is_missing_bin && <span style={{ marginLeft: "4px", fontSize: "10px", color: "#D97706" }}>(missing)</span>}
+                                </td>
+                                <td style={{ padding: "8px 0", color: "#6B7280", fontFamily: "monospace", fontSize: "11px" }}>
+                                  {b.lower_bound != null || b.upper_bound != null
+                                    ? `${b.lower_bound ?? "−∞"} → ${b.upper_bound ?? "+∞"}`
+                                    : "categorical"}
+                                </td>
+                                <td style={{ padding: "8px 0" }}>
+                                  <input type="number" value={b.raw_score} step="0.5"
+                                    onChange={e => handleBinScoreChange(f.factor_name, b.id, e.target.value)}
+                                    style={{ width: "64px", padding: "4px 6px", border: "1px solid #D1D5DB", borderRadius: "4px", textAlign: "center", fontFamily: "monospace", fontSize: "13px" }} />
+                                </td>
+                                <td style={{ padding: "8px 0" }}>
+                                  <ScoreBar score={b.raw_score} min={f.score_range_min} max={f.score_range_max} />
+                                </td>
+                                <td style={{ padding: "8px 0", color: "#6B7280", fontSize: "12px" }}>{b.risk_interpretation}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ── Tiers Tab ── */}
+            {tab === "tiers" && (
+              <div style={{ background: "#fff", borderRadius: "8px", border: "1px solid #E5E7EB", overflow: "hidden" }}>
+                <table style={{ width: "100%", fontSize: "13px", borderCollapse: "collapse" }}>
+                  <thead style={{ background: "#F9FAFB" }}>
+                    <tr style={{ textAlign: "left", color: "#6B7280", fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                      <th style={{ padding: "12px 20px" }}>Tier</th>
+                      <th style={{ padding: "12px 20px" }}>Min Score</th>
+                      <th style={{ padding: "12px 20px" }}>Decision</th>
+                      <th style={{ padding: "12px 20px" }}>Estimated PD</th>
+                      <th style={{ padding: "12px 20px" }}>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tiers.map(t => (
+                      <tr key={t.id} style={{ borderTop: "1px solid #F3F4F6" }}>
+                        <td style={{ padding: "12px 20px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                            <div style={{ width: "16px", height: "16px", borderRadius: "50%", background: t.color_hex }} />
+                            <span style={{ fontWeight: 600 }}>{t.tier_name}</span>
+                          </div>
+                        </td>
+                        <td style={{ padding: "12px 20px" }}>
+                          {t.min_score !== null ? (
+                            <input type="number" value={t.min_score} step="1"
+                              onChange={e => handleTierChange(t.id, "min_score", e.target.value)}
+                              style={{ width: "80px", padding: "4px 8px", border: "1px solid #D1D5DB", borderRadius: "4px", textAlign: "center", fontFamily: "monospace" }} />
+                          ) : <span style={{ color: "#9CA3AF", fontSize: "12px" }}>−∞ (default)</span>}
+                        </td>
+                        <td style={{ padding: "12px 20px" }}>
+                          <select value={t.decision} onChange={e => handleTierChange(t.id, "decision", e.target.value)}
+                            style={{ padding: "4px 8px", border: "1px solid #D1D5DB", borderRadius: "4px", fontSize: "13px" }}>
+                            <option>AUTO_APPROVE</option><option>APPROVE_STANDARD</option><option>MANUAL_REVIEW</option><option>DECLINE</option>
+                          </select>
+                        </td>
+                        <td style={{ padding: "12px 20px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                            <input type="number" value={(t.estimated_pd * 100).toFixed(1)} step="0.1"
+                              onChange={e => handleTierChange(t.id, "estimated_pd", parseFloat(e.target.value) / 100)}
+                              style={{ width: "80px", padding: "4px 8px", border: "1px solid #D1D5DB", borderRadius: "4px", textAlign: "center", fontFamily: "monospace" }} />
+                            <span style={{ color: "#9CA3AF", fontSize: "12px" }}>%</span>
+                          </div>
+                        </td>
+                        <td style={{ padding: "12px 20px", color: "#6B7280" }}>{t.description}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* ── Rules Tab ── */}
+            {tab === "rules" && (
+              <div style={{ background: "#fff", borderRadius: "8px", border: "1px solid #E5E7EB", overflow: "hidden" }}>
+                <table style={{ width: "100%", fontSize: "13px", borderCollapse: "collapse" }}>
+                  <thead style={{ background: "#F9FAFB" }}>
+                    <tr style={{ textAlign: "left", color: "#6B7280", fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                      <th style={{ padding: "12px 20px", width: "50px" }}>On</th>
+                      <th style={{ padding: "12px 20px" }}>Code</th>
+                      <th style={{ padding: "12px 20px" }}>Rule Name</th>
+                      <th style={{ padding: "12px 20px" }}>Field</th>
+                      <th style={{ padding: "12px 20px" }}>Op</th>
+                      <th style={{ padding: "12px 20px" }}>Threshold</th>
+                      <th style={{ padding: "12px 20px" }}>Severity</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rules.map(r => (
+                      <tr key={r.id} style={{ borderTop: "1px solid #F3F4F6", opacity: r.enabled ? 1 : 0.5 }}>
+                        <td style={{ padding: "12px 20px" }}>
+                          <div className={`toggle-track ${r.enabled ? "toggle-on" : "toggle-off"}`} onClick={() => handleRuleToggle(r.id)}>
+                            <div className="toggle-thumb" />
+                          </div>
+                        </td>
+                        <td style={{ padding: "12px 20px", fontFamily: "monospace", fontWeight: 700, color: "#DC2626" }}>{r.rule_code}</td>
+                        <td style={{ padding: "12px 20px", fontWeight: 500 }}>{r.rule_name}</td>
+                        <td style={{ padding: "12px 20px", fontFamily: "monospace", fontSize: "11px", color: "#4B5563" }}>{r.condition_field}</td>
+                        <td style={{ padding: "12px 20px", fontFamily: "monospace", textAlign: "center" }}>{r.condition_operator}</td>
+                        <td style={{ padding: "12px 20px" }}>
+                          <input type="text" value={r.condition_value}
+                            onChange={e => handleRuleValueChange(r.id, e.target.value)}
+                            style={{ width: "80px", padding: "4px 8px", border: "1px solid #D1D5DB", borderRadius: "4px", textAlign: "center", fontFamily: "monospace", fontSize: "13px" }} />
+                        </td>
+                        <td style={{ padding: "12px 20px" }}>
+                          <span style={{ padding: "2px 8px", borderRadius: "4px", fontSize: "11px", fontWeight: 600, background: r.severity === "HARD" ? "#FEE2E2" : "#FEF3C7", color: r.severity === "HARD" ? "#991B1B" : "#92400E" }}>
+                            {r.severity}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* ── Audit Tab ── */}
+            {tab === "audit" && (
+              <div style={{ background: "#fff", borderRadius: "8px", border: "1px solid #E5E7EB", overflow: "hidden" }}>
+                <div style={{ padding: "12px 20px", background: "#F9FAFB", borderBottom: "1px solid #E5E7EB", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: "13px", fontWeight: 500, color: "#374151" }}>Change History</span>
+                  <button style={{ fontSize: "13px", color: "#2563EB", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: "4px" }}>
+                    <Icons.Refresh /> Refresh
+                  </button>
+                </div>
+                <table style={{ width: "100%", fontSize: "13px", borderCollapse: "collapse" }}>
+                  <thead style={{ background: "#F9FAFB" }}>
+                    <tr style={{ textAlign: "left", color: "#6B7280", fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                      <th style={{ padding: "12px 20px" }}>Timestamp</th>
+                      <th style={{ padding: "12px 20px" }}>User</th>
+                      <th style={{ padding: "12px 20px" }}>Action</th>
+                      <th style={{ padding: "12px 20px" }}>Table</th>
+                      <th style={{ padding: "12px 20px" }}>Field</th>
+                      <th style={{ padding: "12px 20px" }}>Old</th>
+                      <th style={{ padding: "12px 20px" }}>New</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {AUDIT_LOG.map((a, i) => (
+                      <tr key={i} style={{ borderTop: "1px solid #F3F4F6" }}>
+                        <td style={{ padding: "12px 20px", color: "#6B7280", fontFamily: "monospace", fontSize: "11px" }}>{new Date(a.changed_at).toLocaleString()}</td>
+                        <td style={{ padding: "12px 20px", fontWeight: 500 }}>{a.changed_by}</td>
+                        <td style={{ padding: "12px 20px" }}>
+                          <span style={{ padding: "2px 8px", borderRadius: "4px", fontSize: "11px", fontWeight: 600,
+                            background: a.action === "PUBLISHED" ? "#D1FAE5" : a.action === "UPDATED" ? "#DBEAFE" : "#F3F4F6",
+                            color: a.action === "PUBLISHED" ? "#065F46" : a.action === "UPDATED" ? "#1E40AF" : "#374151" }}>
+                            {a.action}
+                          </span>
+                        </td>
+                        <td style={{ padding: "12px 20px", fontFamily: "monospace", fontSize: "11px" }}>{a.table_name}</td>
+                        <td style={{ padding: "12px 20px", color: "#6B7280" }}>{a.field_name || "—"}</td>
+                        <td style={{ padding: "12px 20px", fontFamily: "monospace", fontSize: "11px", color: "#DC2626" }}>{a.old_value || "—"}</td>
+                        <td style={{ padding: "12px 20px", fontFamily: "monospace", fontSize: "11px", color: "#059669" }}>{a.new_value || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div style={{ maxWidth: "1200px", margin: "0 auto", padding: "16px 24px", textAlign: "center", color: "#9CA3AF", fontSize: "12px" }}>
+            LT Risk Engine v1.2.0 — Calibration Console — Aralytiks LLC
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.render(<App />, document.getElementById("root"));
+  </script>
+</body>
+</html>

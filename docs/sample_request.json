@@ -1,0 +1,46 @@
+{
+  "request_id": "FLOW-2026-02-26-001",
+  "timestamp": "2026-02-26T17:00:00Z",
+  "customer": {
+    "customer_id": "CUST-12345",
+    "date_of_birth": "1985-06-15",
+    "party_type": "B2C",
+    "permit_type": "C",
+    "nationality": "CH",
+    "income_type": "employed",
+    "monthly_gross_income": 9500.00,
+    "monthly_net_income": 7200.00,
+    "monthly_existing_obligations": 450.00,
+    "monthly_rent": 1400.00,
+    "monthly_insurance": 280.00,
+    "monthly_alimony": 0.00,
+    "crif_score": 680,
+    "intrum_score": 4,
+    "zek_has_entries": false,
+    "zek_entry_count": 0
+  },
+  "vehicle": {
+    "vehicle_price": 55000.00,
+    "vehicle_type": "SUV",
+    "vehicle_age_months": 0,
+    "is_electric": true,
+    "eurotax_code": "ET-12345"
+  },
+  "contract": {
+    "contract_id": "CTR-2026-0042",
+    "financed_amount": 44000.00,
+    "downpayment_amount": 11000.00,
+    "residual_value": 22000.00,
+    "term_months": 48,
+    "monthly_payment": 850.00,
+    "interest_rate": 4.25,
+    "product_type": "LEASING"
+  },
+  "dealer": {
+    "dealer_id": "DLR-ZURICH-007",
+    "dealer_name": "AutoCenter Zurich",
+    "dealer_default_rate": 0.035,
+    "dealer_active_months": 48,
+    "dealer_volume_tier": "GOLD"
+  }
+}

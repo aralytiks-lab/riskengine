@@ -1,0 +1,33 @@
+{
+  "request_id": "FLOW-2026-02-26-001",
+  "assessment_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "model_version": "1.2",
+  "total_score": 28.45,
+  "tier": "BRIGHT_GREEN",
+  "decision": "AUTO_APPROVE",
+  "probability_of_default": 0.015,
+  "factor_scores": [
+    {"factor_name": "LTV", "raw_value": "80.0%", "bin_label": "75-85%", "weight": 0.15, "raw_score": 4.0, "weighted_score": 0.6},
+    {"factor_name": "Term", "raw_value": "48m", "bin_label": "37-48m", "weight": 0.10, "raw_score": 6.0, "weighted_score": 0.6},
+    {"factor_name": "Age", "raw_value": "40", "bin_label": "36-45", "weight": 0.10, "raw_score": 0.0, "weighted_score": 0.0},
+    {"factor_name": "CRIF", "raw_value": "680", "bin_label": "500-699 (Good)", "weight": 0.15, "raw_score": 4.0, "weighted_score": 0.6},
+    {"factor_name": "Intrum", "raw_value": "4", "bin_label": ">3 (Established)", "weight": 0.10, "raw_score": 5.0, "weighted_score": 0.5},
+    {"factor_name": "DSCR", "raw_value": "4.07", "bin_label": "3-7 (Adequate)", "weight": 0.15, "raw_score": 0.0, "weighted_score": 0.0},
+    {"factor_name": "Permit", "raw_value": "C_permit", "bin_label": "C_permit", "weight": 0.10, "raw_score": 5.0, "weighted_score": 0.5},
+    {"factor_name": "VehiclePriceTier", "raw_value": "55000", "bin_label": "50k-100k (Premium)", "weight": 0.05, "raw_score": 2.0, "weighted_score": 0.1},
+    {"factor_name": "ZEK", "raw_value": "Clean", "bin_label": "No negative entries", "weight": 0.05, "raw_score": 5.0, "weighted_score": 0.25},
+    {"factor_name": "DealerRisk", "raw_value": "3.5%", "bin_label": "3-8% (Average)", "weight": 0.05, "raw_score": 0.0, "weighted_score": 0.0}
+  ],
+  "dscr": {
+    "dscr_value": 4.07,
+    "monthly_disposable_income": 3665.0,
+    "monthly_payment": 850.0,
+    "calculation_method": "B2C_NET_INCOME",
+    "is_valid": true
+  },
+  "business_rule_overrides": [],
+  "evaluated_at": "2026-02-26T17:00:00.123Z",
+  "processing_time_ms": 3,
+  "legacy_score": 421,
+  "legacy_band": "B"
+}
